@@ -3,7 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:io';
 
 class ApiService {
-  final String baseUrl = "http://10.0.2.2:8000";
+  final String baseUrl = "https://yks-mobil-api.onrender.com";
   final Dio _dio = Dio();
   final _storage = const FlutterSecureStorage();
 
