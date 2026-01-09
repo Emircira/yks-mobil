@@ -29,8 +29,8 @@ from dotenv import load_dotenv
 from PIL import Image 
 import google.generativeai as genai 
 
-import models, schemas
-from database import SessionLocal, engine, Base
+import yks_mobil.models as models, yks_mobil.schemas as schemas
+from yks_mobil.database import SessionLocal, engine, Base
 
 load_dotenv()
 

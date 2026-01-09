@@ -22,6 +22,13 @@ class _LoginScreenState extends State<LoginScreen> {
     // Klavyeyi kapat
     FocusScope.of(context).unfocus();
 
+    // 👇👇👇 BURAYI BEN EKLEDİM: KONSOLDA NE ÇIKACAK BAKALIM 👇👇👇
+    print("--------------------------------------------------");
+    print("KUTUDA YAZAN ŞİFRE: '${_passController.text}'");
+    print("ŞİFRE UZUNLUĞU: ${_passController.text.length}");
+    print("--------------------------------------------------");
+    // 👆👆👆 EĞER BURADA 'Instance of...' YAZARSA ESKİ KOD ÇALIŞIYOR DEMEKTİR 👆👆👆
+
     if (_userController.text.isEmpty || _passController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Lütfen tüm alanları doldur.")),

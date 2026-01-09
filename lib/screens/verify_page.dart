@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-
+import 'package:dio/dio.dart'; // Http yerine Dio kullanıyoruz
 import 'login_screen.dart';
 
 class VerifyPage extends StatefulWidget {
@@ -17,7 +15,9 @@ class _VerifyPageState extends State<VerifyPage> {
   final TextEditingController _codeController = TextEditingController();
   bool _isLoading = false;
 
-  final String baseUrl = 'http://10.0.2.2:8000';
+  // ⚠️ ÖNEMLİ: URL ARTIK RENDER ADRESİ OLMALI!
+  final String baseUrl = 'https://yks-mobil-api.onrender.com';
+  final Dio _dio = Dio();
 
   Future<void> _verifyCode() async {
     if (_codeController.text.isEmpty) return;
@@ -27,44 +27,36 @@ class _VerifyPageState extends State<VerifyPage> {
     });
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/verify'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
+      final response = await _dio.post(
+        '$baseUrl/verify',
+        data: {
           'email': widget.email,
           'code': _codeController.text.trim(),
-        }),
+        },
       );
-
-      final data = jsonDecode(response.body);
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✅ ${data['mesaj'] ?? "Hesap Doğrulandı!"}'),
+            content: Text('✅ ${response.data['mesaj'] ?? "Hesap Doğrulandı!"}'),
             backgroundColor: Colors.green,
           ),
         );
 
+        // Giriş Ekranına Yönlendir
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const LoginScreen()),
         );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ ${data['detail'] ?? "Hata oluştu"}'),
-            backgroundColor: Colors.red,
-          ),
-        );
       }
-    } catch (e) {
+    } on DioException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Bağlantı Hatası: $e'),
+            content: Text(
+                '❌ ${e.response?.data['detail'] ?? "Doğrulama başarısız."}'),
             backgroundColor: Colors.red,
           ),
         );

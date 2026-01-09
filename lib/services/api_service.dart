@@ -46,7 +46,16 @@ class ApiService {
       }
       return "Giriş başarısız.";
     } on DioException catch (e) {
-      return "Hata: ${e.response?.data['detail'] ?? "Sunucuya ulaşılamadı"}";
+      // GÜVENLİ HATA YAKALAMA
+      final data = e.response?.data;
+      if (data != null) {
+        if (data is Map) {
+          return "Hata: ${data['detail'] ?? "Giriş yapılamadı"}";
+        } else if (data is String) {
+          return "Hata: $data";
+        }
+      }
+      return "Sunucuya ulaşılamadı.";
     }
   }
 
@@ -59,6 +68,10 @@ class ApiService {
     double net,
     double hedefNet,
   ) async {
+    print("---------------------------------------");
+    print("API'YE GELEN ŞİFRE: '$password'");
+    print("ŞİFRE UZUNLUĞU: ${password.length}");
+    print("---------------------------------------");
     try {
       await _dio.post(
         '/register',
@@ -74,9 +87,23 @@ class ApiService {
           },
         },
       );
-      return null;
+      return null; // Başarılıysa null döner
     } on DioException catch (e) {
-      return e.response?.data['detail'] ?? "Kayıt hatası.";
+      // --- BURASI DÜZELTİLDİ ---
+      // Gelen veri JSON mu (Map) yoksa düz Yazı mı (String) kontrol ediyoruz.
+      final data = e.response?.data;
+
+      if (data == null) return "Sunucuya bağlanılamadı.";
+
+      if (data is Map) {
+        // Eğer JSON ise 'detail' kısmını al
+        return data['detail'] ?? "Kayıt hatası.";
+      } else if (data is String) {
+        // Eğer düz yazıysa direkt yazıyı döndür
+        return data;
+      }
+
+      return "Bilinmeyen bir hata oluştu.";
     }
   }
 
@@ -162,9 +189,11 @@ class ApiService {
       await _dio.post('/plan-olustur', options: options);
       return null; // 200 OK -> Başarılı
     } on DioException catch (e) {
-      // Eğer 406 hatası gelirse (Backend'deki engel), mesajı döndür.
       if (e.response?.statusCode == 406) {
-        return e.response?.data['detail'] ?? "Önce görevleri tamamla.";
+        // Güvenli veri çekme
+        final data = e.response?.data;
+        if (data is Map) return data['detail'] ?? "Önce görevleri tamamla.";
+        if (data is String) return data;
       }
       return "Bir hata oluştu.";
     }
