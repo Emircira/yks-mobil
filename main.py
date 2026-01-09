@@ -152,7 +152,16 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     existing = db.query(models.User).filter((models.User.email == user.email) | (models.User.username == user.username)).first()
     if existing: raise HTTPException(status_code=400, detail="Kullanıcı zaten var.")
     
-    hashed_pw = pwd_context.hash(user.password)
+   # 👇 CANAVARI YAKALAMA LOGLARI 👇
+    print(f"--------------------------------------------------")
+    print(f"GELEN ŞİFRE TİPİ: {type(user.password)}")
+    print(f"GELEN ŞİFRE (İlk 100 krktr): {str(user.password)[:100]}") 
+    print(f"--------------------------------------------------")
+
+    # 🛡️ GÜVENLİK KİLİDİ: Şifreyi zorla yazıya çevir ve 70 karakterden fazlasını kes at!
+    # Bu sayede ne gelirse gelsin sunucu ASLA çökmeyecek.
+    safe_password = str(user.password)[:70] 
+    hashed_pw = pwd_context.hash(safe_password)
     code = str(random.randint(100000, 999999))
     
     db_user = models.User(username=user.username, email=user.email, hashed_password=hashed_pw, is_active=False, verification_code=code)
