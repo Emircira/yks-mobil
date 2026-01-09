@@ -11,3 +11,4 @@ google-generativeai
 python-multipart
 pillow
 requests
+bcrypt==3.2.2
