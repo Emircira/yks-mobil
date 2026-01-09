@@ -1,0 +1,32 @@
+name: yks_mobil
+description: "A new Flutter project."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.3 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # --- YENİ EKLENENLER ---
+  flutter_local_notifications: ^17.0.0
+  timezone: ^0.9.2
+  
+  # --- MEVCUT PAKETLER ---
+  dio: ^5.4.0
+  flutter_secure_storage: ^9.0.0
+  google_fonts: ^6.1.0
+  animate_do: ^3.1.0
+  image_picker: ^1.0.7
+  fl_chart: ^0.66.0
+  cupertino_icons: ^1.0.2  # Sadece burda kalsın!
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
