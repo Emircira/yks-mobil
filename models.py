@@ -1,6 +1,6 @@
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Float, DateTime, Date, Text
 from sqlalchemy.orm import relationship
-from yks_mobil.database import Base
+from database import Base
 from datetime import datetime
 
 # 1. KULLANICI TABLOSU
