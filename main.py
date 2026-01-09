@@ -13,7 +13,9 @@ from io import BytesIO
 import asyncio
 import traceback
 import time 
+import hashlib # ✅ GÜVENLİK İÇİN EKLENDİ
 
+# Konsol çıktı ayarı
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from contextlib import asynccontextmanager
@@ -29,6 +31,7 @@ from dotenv import load_dotenv
 from PIL import Image 
 import google.generativeai as genai 
 
+# Importlar (Düzeltilmiş hali)
 import models as models, schemas as schemas
 from database import SessionLocal, engine, Base
 
@@ -55,12 +58,18 @@ if GOOGLE_API_KEY:
 Base.metadata.create_all(bind=engine)
 
 # --- YARDIMCI FONKSİYONLAR ---
+
 def calculate_level(xp):
     if xp < 150: return "Çaylak", xp/150
     if xp < 500: return "Çırak", (xp-150)/350
     if xp < 1500: return "Kalfa", (xp-500)/1000
     if xp < 3000: return "Usta", (xp-1500)/1500
     return "YKS LORDU", 1.0
+
+# ✅ GÜVENLİK FONKSİYONU: Şifre Normalizasyonu
+# Bcrypt'in 72 byte limitini aşmamak için şifreyi önce SHA-256 ile hashler.
+def normalize_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 # --- Pydantic MODELLERİ ---
 class VerifyRequest(BaseModel):
@@ -92,7 +101,6 @@ def send_email_func(to_email, subject, body):
         msg['Subject'] = Header(subject, 'utf-8') 
         msg.attach(MIMEText(body, 'plain', 'utf-8')) 
         
-        # Gmail için standart portlar: 587 (TLS)
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.ehlo()
         server.starttls() 
@@ -149,19 +157,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 @app.post("/register")
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # 1. Kullanıcı Kontrolü
     existing = db.query(models.User).filter((models.User.email == user.email) | (models.User.username == user.username)).first()
     if existing: raise HTTPException(status_code=400, detail="Kullanıcı zaten var.")
     
-   # 👇 CANAVARI YAKALAMA LOGLARI 👇
-    print(f"--------------------------------------------------")
-    print(f"GELEN ŞİFRE TİPİ: {type(user.password)}")
-    print(f"GELEN ŞİFRE (İlk 100 krktr): {str(user.password)[:100]}") 
-    print(f"--------------------------------------------------")
+    # ✅ GÜVENLİ HASHLEME (SHA-256 -> BCRYPT)
+    normalized_pw = normalize_password(user.password)
+    hashed_pw = pwd_context.hash(normalized_pw)
 
-    # 🛡️ GÜVENLİK KİLİDİ: Şifreyi zorla yazıya çevir ve 70 karakterden fazlasını kes at!
-    # Bu sayede ne gelirse gelsin sunucu ASLA çökmeyecek.
-    safe_password = str(user.password)[:70] 
-    hashed_pw = pwd_context.hash(safe_password)
     code = str(random.randint(100000, 999999))
     
     db_user = models.User(username=user.username, email=user.email, hashed_password=hashed_pw, is_active=False, verification_code=code)
@@ -179,11 +182,13 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     
-    # Mail Gönderimi
-    mail_durumu = send_email_func(user.email, "Doğrulama Kodu", f"Kodun: {code}")
-    
-    if not mail_durumu:
-        print("⚠️ Uyarı: Kullanıcı oluştu ama mail gidemedi.")
+    # Mail Gönderimi (Hata Toleranslı)
+    try:
+        mail_durumu = send_email_func(user.email, "Doğrulama Kodu", f"Kodun: {code}")
+        if not mail_durumu:
+            print("⚠️ Uyarı: Kullanıcı oluştu ama mail gidemedi.")
+    except Exception as e:
+        print(f"Mail kritik hata: {e}")
 
     return {"durum": "basarili", "mesaj": "Kayıt alındı. Kod mail adresine gönderildi."}
 
@@ -201,8 +206,15 @@ def verify_email(req: VerifyRequest, db: Session = Depends(get_db)):
 @app.post("/token")
 def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == form.username).first()
-    if not user or not pwd_context.verify(form.password, user.hashed_password):
+    if not user:
         raise HTTPException(status_code=401, detail="Hatalı giriş.")
+    
+    # ✅ GİRİŞTE DE AYNI NORMALİZASYON
+    normalized_input = normalize_password(form.password)
+    
+    if not pwd_context.verify(normalized_input, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Hatalı giriş.")
+        
     if not user.is_active: raise HTTPException(status_code=403, detail="Onaylanmamış hesap.")
     return {"access_token": create_access_token({"sub": user.username}), "token_type": "bearer"}
 
