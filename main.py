@@ -316,12 +316,22 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
             tasks = [t.content for t in son_bitenler]
             biten_konular_txt = f"En son şunları bitirdin: {', '.join(tasks)}"
 
+        # 👇 BURAYI DEĞİŞTİRDİK: Formatı JSON'a zorluyoruz ki saçma yazılar gelmesin.
         prompt = f"""
         ROL: YKS Müfredat Planlayıcısı.
         ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}.
         DURUM: {biten_konular_txt}
 
-        GÖREV: Bugün için 4 adet NET görev hazırla.
+        GÖREV: Bugün için 4 adet NET, KISA ve ÖZ ders çalışma görevi ver.
+        
+        KURALLAR:
+        1. Asla "Merhaba", "Tamamdır" gibi giriş cümleleri kurma.
+        2. Sadece yapılacak işi yaz.
+        3. Çıktıyı tam olarak şu formatta ver (her satıra bir görev):
+        - TYT Matematik: Sayılar konusundan 2 test çöz
+        - TYT Türkçe: Paragraf taktikleri videosu izle
+        - Geometri: Üçgenler konu tekrarı
+        - TYT Fen: Fizik bilimine giriş testi
         """
 
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
@@ -330,14 +340,31 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         
-        lines = [line.strip("- *").strip() for line in raw_text.split("\n") if len(line.strip()) > 5]
-        new_tasks = lines[:5]
+        # 👇 TEMİZLİK ROBOTU: Sadece "-" veya "*" ile başlayan satırları alacağız.
+        clean_tasks = []
+        for line in raw_text.split("\n"):
+            line = line.strip()
+            # Eğer satır boşsa veya çok uzun bir açıklama metniyse (150 karakterden uzun) alma.
+            if len(line) < 5 or len(line) > 150: 
+                continue
+            
+            # Başındaki işaretleri temizle
+            cleaned_line = line.replace("- ", "").replace("* ", "").replace("1. ", "").strip()
+            clean_tasks.append(cleaned_line)
 
-        for task in new_tasks:
+        # En fazla 5 görev alalım
+        final_tasks = clean_tasks[:5]
+
+        for task in final_tasks:
             db.add(models.Todo(content=task, user_id=user.id))
         
         db.commit()
-        return {"mesaj": "Müfredata uygun karma program hazır!", "gorevler": new_tasks}
+        # Eğer hiç görev çıkmadıysa manuel bir tane ekle
+        if not final_tasks:
+             db.add(models.Todo(content="Bugünlük serbest çalış, plan oluşturulamadı.", user_id=user.id))
+             db.commit()
+             
+        return {"mesaj": "Planın hazır!", "gorevler": final_tasks}
 
     except HTTPException as he: raise he
     except Exception as e:
@@ -381,15 +408,13 @@ def ask_tutor(req: SoruIstegi, db: Session = Depends(get_db), user: models.User 
         print(f"AI Hata: {e}")
         return {"cevap": f"Hata: {str(e)}"}
 
+# main.py içindeki ai_analyze fonksiyonunu sil ve bunu yapıştır:
+
 @app.post("/ai-koc-analiz")
 def ai_analyze(req: AiGoalRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
-    if unfinished_count > 0:
-        return {
-            "unvan": "ÖNCE GÖREVLER!",
-            "mesaj": f"Masanda {unfinished_count} tane yarım kalmış iş var. Onları bitirmeden analiz yok!"
-        }
-
+    
+    # Hedefleri her türlü kaydedelim (Hata olsa bile veri kaybolmasın)
     try:
         if user.target:
             if hasattr(user.target, 'ranking'): user.target.ranking = req.siralama
@@ -397,19 +422,46 @@ def ai_analyze(req: AiGoalRequest, user: models.User = Depends(get_current_user)
             db.commit()
     except: pass
 
+    if unfinished_count > 0:
+        return {
+            "unvan": "ÖNCE GÖREVLER!",
+            "mesaj": f"Masanda {unfinished_count} tane yarım kalmış iş var. Analiz istiyorsan önce onları bitir."
+        }
+
     try:
         prompt = f"""
-        Rol: Sert YKS Koçu. Hedef: {req.siralama}, {req.universite}.
-        GÖREV: JSON formatında motivasyon ver. Format: {{"unvan": "...", "mesaj": "..."}}
+        Rol: Sert ve Disiplinli YKS Koçu. 
+        Öğrenci Hedefi: Sıralama {req.siralama}, Üniversite {req.universite}.
+        
+        GÖREV: Bu hedefe ulaşmak için kısa, vurucu bir motivasyon/analiz yap.
+        CEVAP FORMATI: Sadece aşağıdaki JSON formatında cevap ver. Markdown kullanma.
+        
+        {{
+            "unvan": "KISA BİR LAKAP (Örn: SON SAVAŞÇI)",
+            "mesaj": "Buraya en fazla 2 cümlelik sert bir tavsiye yaz."
+        }}
         """
         if not GOOGLE_API_KEY: return {"unvan": "OFFLINE", "mesaj": "Bağlantı yok."}
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
-        text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
-    except:
-        return {"unvan": "YKS SAVAŞÇISI", "mesaj": "Asla pes etme!"}
+        
+        # 👇 JSON TEMİZLEYİCİ
+        text = response.text.strip()
+        # Eğer yapay zeka ```json ... ``` gibi şeyler eklediyse temizle
+        if "```" in text:
+            text = text.replace("```json", "").replace("```", "").strip()
+        
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Eğer hala JSON değilse manuel cevap dön, hata verme
+            return {"unvan": "HEDEF ALINDI", "mesaj": "Hedefin sisteme işlendi. Şimdi çalışma zamanı!"}
+            
+    except Exception as e:
+        print(f"Analiz Hatası: {e}")
+        # Hata olsa bile 200 OK dönelim ki uygulama çökmesin
+        return {"unvan": "HEDEF KAYDEDİLDİ", "mesaj": "Başarıyla kaydedildi."}
 
 @app.post("/soru-coz")
 async def solve_question(
