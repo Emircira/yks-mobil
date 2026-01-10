@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Float, DateTime, Date, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Float, DateTime, Date, Text, JSON
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
@@ -15,7 +15,7 @@ class User(Base):
     verification_code = Column(String, nullable=True)
     xp = Column(Integer, default=0)
     
-    # 🔥 YENİ EKLENEN STREAK SÜTUNLARI
+    # 🔥 STREAK SÜTUNLARI
     streak = Column(Integer, default=0)
     last_active_date = Column(Date, nullable=True)
 
@@ -64,6 +64,9 @@ class ExamResult(Base):
     
     tyt_net = Column(Float)
     ayt_net = Column(Float)
+    
+    # 👇 YENİ SÜTUN: Konu bazlı yanlışları tutar (Örn: {"Türev": 2, "Optik": 1})
+    topic_mistakes = Column(JSON, default={}) 
     
     ai_comment = Column(String, nullable=True)
     date = Column(DateTime, default=datetime.utcnow)

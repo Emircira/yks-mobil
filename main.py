@@ -8,12 +8,12 @@ from email.header import Header
 import random
 import json
 from datetime import datetime, timedelta, date 
-from typing import Optional
+from typing import Optional, Dict
 from io import BytesIO
 import asyncio
 import traceback
 import time 
-import hashlib # ✅ GÜVENLİK İÇİN EKLENDİ
+import hashlib 
 
 # Konsol çıktı ayarı
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 from PIL import Image 
 import google.generativeai as genai 
 
-# Importlar (Düzeltilmiş hali)
+# Importlar
 import models as models, schemas as schemas
 from database import SessionLocal, engine, Base
 
@@ -66,12 +66,11 @@ def calculate_level(xp):
     if xp < 3000: return "Usta", (xp-1500)/1500
     return "YKS LORDU", 1.0
 
-# ✅ GÜVENLİK FONKSİYONU: Şifre Normalizasyonu
-# Bcrypt'in 72 byte limitini aşmamak için şifreyi önce SHA-256 ile hashler.
 def normalize_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 # --- Pydantic MODELLERİ ---
+# (schemas.py olmadığı için bazı modelleri burada tanımlıyoruz)
 class VerifyRequest(BaseModel):
     email: str
     code: str
@@ -86,14 +85,23 @@ class AiGoalRequest(BaseModel):
 class SoruIstegi(BaseModel):
     soru_metni: str
 
+# 👇 YENİ DENEME İSTEK MODELİ (Konu Analizli)
+class DenemeEkleRequest(BaseModel):
+    exam_name: str
+    tyt_turkce: float
+    tyt_sosyal: float
+    tyt_mat: float
+    tyt_fen: float
+    ayt_net: float
+    # Örn: {"Fonksiyonlar": 2, "Paragraf": 3}
+    yanlis_konular: Dict[str, int] = {} 
+
 scheduler = AsyncIOScheduler()
 
 #  MAIL FONKSİYONU 
 def send_email_func(to_email, subject, body):
     if not MAIL_USERNAME or not MAIL_PASSWORD:
-        print("❌ MAIL AYARLARI EKSİK! .env dosyasını kontrol et.")
         return False 
-
     try:
         msg = MIMEMultipart()
         msg['From'] = f"YKS Asistan <{MAIL_USERNAME}>"
@@ -107,14 +115,9 @@ def send_email_func(to_email, subject, body):
         server.login(MAIL_USERNAME, MAIL_PASSWORD)
         server.sendmail(MAIL_USERNAME, to_email, msg.as_string())
         server.quit()
-        print(f"✅ Mail başarıyla gönderildi: {to_email}")
         return True
-
-    except smtplib.SMTPAuthenticationError:
-        print("🚨 GİRİŞ HATASI: Kullanıcı adı veya Uygulama Şifresi yanlış! .env dosyasını kontrol et.")
-        return False
     except Exception as e:
-        print(f"🚨 BEKLENMEYEN MAIL HATASI: {str(e)}")
+        print(f"Mail Hata: {str(e)}")
         return False
 
 @asynccontextmanager
@@ -157,14 +160,11 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 @app.post("/register")
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    # 1. Kullanıcı Kontrolü
     existing = db.query(models.User).filter((models.User.email == user.email) | (models.User.username == user.username)).first()
     if existing: raise HTTPException(status_code=400, detail="Kullanıcı zaten var.")
     
-    # ✅ GÜVENLİ HASHLEME (SHA-256 -> BCRYPT)
     normalized_pw = normalize_password(user.password)
     hashed_pw = pwd_context.hash(normalized_pw)
-
     code = str(random.randint(100000, 999999))
     
     db_user = models.User(username=user.username, email=user.email, hashed_password=hashed_pw, is_active=False, verification_code=code)
@@ -182,14 +182,7 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     
-    # Mail Gönderimi (Hata Toleranslı)
-    try:
-        mail_durumu = send_email_func(user.email, "Doğrulama Kodu", f"Kodun: {code}")
-        if not mail_durumu:
-            print("⚠️ Uyarı: Kullanıcı oluştu ama mail gidemedi.")
-    except Exception as e:
-        print(f"Mail kritik hata: {e}")
-
+    send_email_func(user.email, "Doğrulama Kodu", f"Kodun: {code}")
     return {"durum": "basarili", "mesaj": "Kayıt alındı. Kod mail adresine gönderildi."}
 
 @app.post("/verify")
@@ -206,12 +199,9 @@ def verify_email(req: VerifyRequest, db: Session = Depends(get_db)):
 @app.post("/token")
 def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == form.username).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Hatalı giriş.")
+    if not user: raise HTTPException(status_code=401, detail="Hatalı giriş.")
     
-    # ✅ GİRİŞTE DE AYNI NORMALİZASYON
     normalized_input = normalize_password(form.password)
-    
     if not pwd_context.verify(normalized_input, user.hashed_password):
         raise HTTPException(status_code=401, detail="Hatalı giriş.")
         
@@ -225,7 +215,6 @@ def delete_account(user: models.User = Depends(get_current_user), db: Session = 
         db.query(models.ExamResult).filter(models.ExamResult.user_id == user.id).delete()
         db.query(models.UserTarget).filter(models.UserTarget.user_id == user.id).delete()
         db.query(models.ChatMessage).filter(models.ChatMessage.user_id == user.id).delete()
-        
         db.delete(user)
         db.commit()
         return {"mesaj": "Hesap silindi."}
@@ -243,19 +232,15 @@ def get_profile(user: models.User = Depends(get_current_user), db: Session = Dep
             user.streak += 1 
         else:
             user.streak = 1 
-        
         user.last_active_date = bugun
         db.commit()
     
     rutbe, ilerleme = calculate_level(user.xp)
-    
     target = user.target
     bilgi = "Belirsiz"
     if target:
-        ranking = getattr(target, 'ranking', None)
-        dept = getattr(target, 'dream_department', None)
-        if dept: bilgi = dept
-        elif ranking: bilgi = f"Hedef: {ranking}"
+        if target.dream_department: bilgi = target.dream_department
+        elif target.ranking: bilgi = f"Hedef: {target.ranking}"
             
     return {
         "kullanici_adi": user.username,
@@ -275,78 +260,46 @@ def toggle_todo(todo_id: int, db: Session = Depends(get_db), user: models.User =
     todo = db.query(models.Todo).filter(models.Todo.id == todo_id, models.Todo.user_id == user.id).first()
     if todo:
         todo.is_completed = not todo.is_completed
-        if todo.is_completed:
-            user.xp += 10 
-        else:
-            user.xp -= 10 
+        if todo.is_completed: user.xp += 10 
+        else: user.xp -= 10 
         db.commit()
     return {"mesaj": "Ok", "yeni_xp": user.xp}
 
 @app.delete("/gorevleri-temizle")
 def clear_todos(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    count = db.query(models.Todo).filter(
-        models.Todo.user_id == user.id, 
-        models.Todo.is_completed == True
-    ).delete()
+    count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == True).delete()
     db.commit()
     return {"mesaj": f"{count} tamamlanmış görev temizlendi!"}
 
-
-# main.py içindeki create_ai_plan fonksiyonunu sil ve bunu yapıştır:
-
 @app.post("/plan-olustur")
 def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    # 🛑 KATI KURAL: Yarım kalan görevin varsa yeni plan ALAMAZSIN.
     unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
-    
     if unfinished_count > 0:
-        raise HTTPException(
-            status_code=406, 
-            detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın! Onlar bitmeden yeni plan yok."
-        )
+        raise HTTPException(status_code=406, detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın!")
 
     try:
-        # --- SEVİYE TESPİTİ VE ZORLUK AYARI ---
         rutbe, _ = calculate_level(user.xp)
-        
-        zorluk_talimati = ""
-        if rutbe == "Çaylak":
-            zorluk_talimati = "SEVİYE: BAŞLANGIÇ. Öğrenciyi soğutma. Konu anlatımı videoları ağırlıklı olsun. Görev başına en fazla 1 test (10-12 soru) ver."
-        elif rutbe == "Çırak":
-            zorluk_talimati = "SEVİYE: ORTA. Alışmaya başladı. Hem konu hem soru olsun. Görev başına 2 test veya 1 özet çıkarma görevi ver."
-        elif rutbe == "Kalfa":
-            zorluk_talimati = "SEVİYE: İLERİ. Vitesi artır. Artık konu eksiği azaldı. Bol soru çözümü (en az 3 test) ve Branş Denemeleri ekle."
-        else: # Usta ve YKS LORDU
-            zorluk_talimati = "SEVİYE: HARDCORE (DERECE ÖĞRENCİSİ). Acıma. Seri denemeler, zor soru bankalarından 4-5 test, 50+ paragraf sorusu kilitle."
-
         target = user.target
         hedef_siralamasi = target.ranking if target and target.ranking else "İlk 10.000"
         mevcut_tyt = target.current_tyt_net if target else 0
         
-        # Geçmişi hatırlat
-        son_bitenler = db.query(models.Todo).filter(
-            models.Todo.user_id == user.id, 
-            models.Todo.is_completed == True
-        ).order_by(models.Todo.id.desc()).limit(5).all()
-
+        son_bitenler = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == True).order_by(models.Todo.id.desc()).limit(5).all()
         biten_konular_txt = ""
         if son_bitenler:
             tasks = [t.content for t in son_bitenler]
             biten_konular_txt = f"Son bitenler: {', '.join(tasks)}"
+        
+        zorluk = "Zor" if rutbe in ["Usta", "YKS LORDU"] else "Orta"
 
         prompt = f"""
         ROL: YKS Planlayıcısı.
-        ÖĞRENCİ PROFİLİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. Rütbe: {rutbe}.
-        {zorluk_talimati}
+        ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. Rütbe: {rutbe}.
         GEÇMİŞ: {biten_konular_txt}
-        
-        GÖREV: Bugün için öğrencinin seviyesine (%100 uygun) 4 adet nokta atışı çalışma görevi ver.
-        
-        KURALLAR:
-        1. ASLA sohbet etme, giriş cümlesi kurma.
-        2. Çıktıyı SADECE şu formatta ver (her satıra bir görev):
-        - Ders Adı: Yapılacak İş (Örn: 2 Test Çöz / Video İzle)
-        - Ders Adı: Yapılacak İş
+        ZORLUK: {zorluk}
+        GÖREV: Bugün için 4 adet nokta atışı görev ver.
+        KURALLAR: ASLA sohbet etme. SADECE liste ver.
+        FORMAT:
+        - Ders: Görev
         """
 
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
@@ -358,8 +311,8 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         clean_tasks = []
         for line in raw_text.split("\n"):
             line = line.strip()
-            if len(line) < 5 or len(line) > 150: continue
-            cleaned_line = line.replace("- ", "").replace("* ", "").replace("1. ", "").strip()
+            if len(line) < 5: continue
+            cleaned_line = line.replace("- ", "").replace("* ", "").strip()
             clean_tasks.append(cleaned_line)
 
         final_tasks = clean_tasks[:5]
@@ -367,254 +320,161 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
             db.add(models.Todo(content=task, user_id=user.id))
         
         db.commit()
-        if not final_tasks:
-             db.add(models.Todo(content="Bugünlük serbest tekrar yap.", user_id=user.id))
-             db.commit()
-             
-        return {"mesaj": f"Seviyen ({rutbe}) için optimize edilmiş plan hazır!", "gorevler": final_tasks}
-
-    except HTTPException as he: raise he
+        return {"mesaj": "Plan hazır!", "gorevler": final_tasks}
     except Exception as e:
-        print(f"Plan Hata: {e}")
-        raise HTTPException(status_code=500, detail="Plan motorunda hata oluştu.")
-
+        raise HTTPException(status_code=500, detail="Hata oluştu")
 
 @app.post("/ai-soru-sor")
 def ask_tutor(req: SoruIstegi, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     try:
         if not GOOGLE_API_KEY: return {"cevap": "Bağlantı yok."}
-
         target = user.target
-        profil_ozeti = f"""
-        İsim: {user.username}
-        Hedef: {target.ranking if target else 'İlk 10.000'}
-        """
-
         
         system_instruction = f"""
-        Sen YKS Koçusun. Bilgiler: {profil_ozeti}.
-        
-        TARZIN:
-        1. Öğrenciyi soru yağmuruna tutma. Sadece sorusuna odaklan.
-        2. Kısa, net ve çözüm odaklı ol.
-        3. Motivasyon ver ama boş yapma.
-        
-        ÖNEMLİ - GÖREV SİSTEMİ:
-        Eğer cevabında öğrenciye "Şunu çalış, bunu çöz" dersen, cümlenin EN SONUNA şu kodu ekle:
-        GOREV_EKLE: <Buraya Yapılacak İşi 3-4 Kelimeyle Yaz>
-        
-        Örnek Cevap:
-        "Türevde zorlanman normal, bol soru çözmelisin.
-        GOREV_EKLE: Türev Çözümlü Video İzle"
+        Sen YKS Koçusun.
+        ÖĞRENCİ: {user.username}, Hedef: {target.ranking if target else 'Belirsiz'}.
+        GÖREV EKLEME: Eğer ders önerirsen cümlenin sonuna "GOREV_EKLE: <Kısa Görev>" yaz.
         """
-        
-        full_prompt = f"{system_instruction}\n\nÖğrenci Sorusu: {req.soru_metni}"
+        full_prompt = f"{system_instruction}\n\nSoru: {req.soru_metni}"
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(full_prompt)
         final_answer = response.text
-
         
         ai_reply_to_show = final_answer
-        
-        
         if "GOREV_EKLE:" in final_answer:
             parts = final_answer.split("GOREV_EKLE:")
-            ai_reply_to_show = parts[0].strip() # Kullanıcıya sadece sohbeti göster
-            
+            ai_reply_to_show = parts[0].strip()
             raw_task = parts[1].strip()
-            clean_task = raw_task.replace("*", "").replace("-", "").replace(".", "").strip()
-            
-            # Veritabanına (Planlarım Listesine) Ekle
             try:
-                
-                new_todo = models.Todo(user_id=user.id, content=f"🤖 Hoca: {clean_task}")
-                db.add(new_todo)
+                db.add(models.Todo(user_id=user.id, content=f"🤖 Hoca: {raw_task}"))
                 db.commit()
-            except:
-                db.rollback()
+            except: db.rollback()
 
         db.add(models.ChatMessage(user_id=user.id, user_question=req.soru_metni, ai_response=ai_reply_to_show))
         db.commit()
-
         return {"cevap": ai_reply_to_show}
     except Exception as e:
-        print(f"AI Hata: {e}")
         return {"cevap": f"Hata: {str(e)}"}
 
 @app.post("/ai-koc-analiz")
 def ai_analyze(req: AiGoalRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
-    
-    # Hedefleri her türlü kaydedelim (Hata olsa bile veri kaybolmasın)
     try:
-        if user.target:
-            if hasattr(user.target, 'ranking'): user.target.ranking = req.siralama
+        if not user.target:
+            db.add(models.Target(user_id=user.id, ranking=req.siralama, dream_university=req.universite))
+            db.commit()
+            db.refresh(user)
+        else:
+            user.target.ranking = req.siralama
             user.target.dream_university = req.universite
             db.commit()
-    except: pass
-
-    if unfinished_count > 0:
-        return {
-            "unvan": "ÖNCE GÖREVLER!",
-            "mesaj": f"Masanda {unfinished_count} tane yarım kalmış iş var. Analiz istiyorsan önce onları bitir."
-        }
-
-    try:
+            
+        mevcut_net = user.target.current_tyt_net if user.target else 0
+        seviye = "BAŞLANGIÇ" if mevcut_net < 30 else "ORTA" if mevcut_net < 60 else "İYİ"
+        
         prompt = f"""
-        Rol: Sert ve Disiplinli YKS Koçu. 
-        Öğrenci Hedefi: Sıralama {req.siralama}, Üniversite {req.universite}.
-        
-        GÖREV: Bu hedefe ulaşmak için kısa, vurucu bir motivasyon/analiz yap.
-        CEVAP FORMATI: Sadece aşağıdaki JSON formatında cevap ver. Markdown kullanma.
-        
-        {{
-            "unvan": "KISA BİR LAKAP (Örn: SON SAVAŞÇI)",
-            "mesaj": "Buraya en fazla 2 cümlelik sert bir tavsiye yaz."
-        }}
+        Rol: YKS Koçu. Öğrenci Hedefi: {req.siralama}. Net: {mevcut_net}. Seviye: {seviye}.
+        Görev: Durum analizi yap.
+        Format (JSON): {{ "unvan": "...", "mesaj": "..." }}
         """
-        if not GOOGLE_API_KEY: return {"unvan": "OFFLINE", "mesaj": "Bağlantı yok."}
+        
+        if not GOOGLE_API_KEY: return {"unvan": "OFFLINE", "mesaj": "Kaydedildi."}
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
-        
-        # 👇 JSON TEMİZLEYİCİ
-        text = response.text.strip()
-        # Eğer yapay zeka ```json ... ``` gibi şeyler eklediyse temizle
-        if "```" in text:
-            text = text.replace("```json", "").replace("```", "").strip()
-        
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Eğer hala JSON değilse manuel cevap dön, hata verme
-            return {"unvan": "HEDEF ALINDI", "mesaj": "Hedefin sisteme işlendi. Şimdi çalışma zamanı!"}
-            
-    except Exception as e:
-        print(f"Analiz Hatası: {e}")
-        # Hata olsa bile 200 OK dönelim ki uygulama çökmesin
-        return {"unvan": "HEDEF KAYDEDİLDİ", "mesaj": "Başarıyla kaydedildi."}
+        text = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(text)
+    except Exception:
+        return {"unvan": "KAYDEDİLDİ", "mesaj": "Hedef alındı."}
 
 @app.post("/soru-coz")
-async def solve_question(
-    file: UploadFile = File(...), 
-    user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db) 
-):
+async def solve_question(file: UploadFile = File(...), user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        if not GOOGLE_API_KEY: return {"cevap": "AI Bağlantısı yok."}
+        if not GOOGLE_API_KEY: return {"cevap": "AI Yok"}
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
-        
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(["Bu soruyu çöz:", image])
-        
         user.xp += 15
-        db.commit() 
-        
+        db.commit()
         return {"cevap": response.text}
-    except Exception as e:
-        print(f"Hata: {e}")
-        return {"cevap": "Görseli okuyamadım."}
-
-# main.py içindeki create_challenge fonksiyonunu sil ve bunu yapıştır:
-
-# main.py içindeki create_challenge fonksiyonunu sil ve bunu yapıştır:
+    except:
+        return {"cevap": "Hata oluştu."}
 
 @app.post("/challenge-olustur")
 def create_challenge(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     try:
-        # 1. KULLANICI SEVİYESİNİ BUL
         rutbe, _ = calculate_level(user.xp)
-        
-        # 2. GÜNDEM ANALİZİ (Sürekli aynı konu gelmesin diye)
-        # Kullanıcının son eklediği görevlere bakıp konuyu oradan seçiyoruz.
         son_gorevler = db.query(models.Todo).filter(models.Todo.user_id == user.id).order_by(models.Todo.id.desc()).limit(3).all()
+        konu_baglam = ", ".join([t.content for t in son_gorevler]) if son_gorevler else "Genel YKS"
         
-        konu_baglam = "Genel YKS (Rastgele Zor Konu)"
-        if son_gorevler:
-            konu_ozetleri = ", ".join([t.content for t in son_gorevler])
-            konu_baglam = f"Öğrencinin şu an çalıştığı konular: {konu_ozetleri}. Challenge BU KONULARDAN BİRİYLE ilgili olsun."
-
-        # 3. ZORLUK AYARI (Seviyeye göre soru sayısı)
-        soru_hedefi = "20 soru"
-        if rutbe == "Usta" or rutbe == "YKS LORDU":
-            soru_hedefi = "en az 60 zor soru"
-        elif rutbe == "Kalfa":
-            soru_hedefi = "40 soru"
-        
-        # 4. GÜÇLÜ PROMPT
         prompt = f"""
-        ROL: Oyun Yapımcısı ve Sert YKS Koçu.
-        OYUNCU: {rutbe} seviyesinde.
-        KONU SEÇİMİ: {konu_baglam}
-        
-        GÖREV: Öğrenciye meydan okuyan, oyun diliyle yazılmış (Boss Fight, Critical Hit vb.) bir metin yaz.
-        
-        ÇOK ÖNEMLİ KURAL:
-        Metin gaza getirici olsun AMA mutlaka içinde SOMUT BİR GÖREV barındırsın.
-        Metnin sonuna "GÖREVİN: [Konu Adı] konusundan süre tutarak {soru_hedefi} çözmek!" gibi net bir emir ekle.
-        
-        CEVAP FORMATI (JSON):
-        {{
-            "baslik": "Kısa ve Epik Başlık (Örn: Türev Boss Savaşı)",
-            "aciklama": "Hikayeli motivasyon metni + NET GÖREV TANIMI.",
-            "sure_dk": 60, 
-            "xp_degeri": 150
-        }}
+        Rol: Oyun Yapımcısı. Seviye: {rutbe}. Konu: {konu_baglam}.
+        Görev: Zorlu bir challenge metni yaz.
+        Format (JSON): {{ "baslik": "...", "aciklama": "...", "sure_dk": 45, "xp_degeri": 100 }}
+        Kural: Metin sonunda 'GÖREVİN: ... çözmek' yazmalı.
         """
-
         if not GOOGLE_API_KEY: raise Exception("API Yok")
-
+        
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
-        
-        # Temizlik
-        text = response.text.strip()
-        if "```" in text:
-            text = text.replace("```json", "").replace("```", "").strip()
-        
+        text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
+    except:
+        return {"baslik": "Hata Avı", "aciklama": "Sistem hata verdi, sen 20 soru çöz.", "sure_dk": 30, "xp_degeri": 50}
 
-    except Exception as e:
-        print(f"Challenge Hata: {e}")
-        # Hata durumunda yedek plan (Yine kullanıcının seviyesine uygun hissettiren)
-        return {
-            "baslik": "Meydan Okuma Başladı", 
-            "aciklama": "Sistem anlık olarak sana özel görev oluşturamadı ama durmak yok! Masaya geç ve en zorlandığın dersten 40 soru çözerek bu bug'ı yen!", 
-            "sure_dk": 45, 
-            "xp_degeri": 75
-        }
+# 👇 GÜNCELLENMİŞ DENEME EKLEME (KONU ANALİZLİ)
 @app.post("/deneme-ekle")
-def add_exam(exam: schemas.ExamResultCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    toplam_tyt = exam.tyt_turkce + exam.tyt_sosyal + exam.tyt_mat + exam.tyt_fen
+def add_exam(req: DenemeEkleRequest, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    toplam_tyt = req.tyt_turkce + req.tyt_sosyal + req.tyt_mat + req.tyt_fen
     user.xp += 50
     
+    # 1. AI YORUMU (YANLIŞ KONULARA GÖRE)
     ai_tavsiyesi = "Analiz oluşturulamadı."
-    if GOOGLE_API_KEY:
+    if GOOGLE_API_KEY and req.yanlis_konular:
         try:
-            prompt = f"Rol: Sert Koç. Sonuçlar: {exam.tyt_turkce} Türkçe, {exam.tyt_mat} Mat. 2 cümlelik eleştiri yap."
+            hatalar = ", ".join([f"{k} ({v} yanlış)" for k,v in req.yanlis_konular.items()])
+            prompt = f"""
+            Rol: Sert YKS Koçu. 
+            Öğrenci Denemesi: {req.exam_name}. Net: {toplam_tyt}.
+            🚨 EN ÇOK YANLIŞ YAPILAN KONULAR: {hatalar}.
+            
+            GÖREV: Sadece bu yanlış konulara odaklanan, nokta atışı bir eleştiri ve tavsiye ver.
+            Kısa ve net ol (Maks 2 cümle).
+            """
+            model = genai.GenerativeModel(MODEL_NAME)
+            response = model.generate_content(prompt)
+            ai_tavsiyesi = response.text.strip()
+        except Exception as e:
+            print(f"Analiz Hatası: {e}")
+    elif GOOGLE_API_KEY:
+        # Konu girilmediyse genel yorum
+        try:
+            prompt = f"Rol: Sert Koç. Net: {toplam_tyt}. Genel bir tavsiye ver."
             model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(prompt)
             ai_tavsiyesi = response.text.strip()
         except: pass
 
+    # 2. VERİTABANINA KAYIT
     yeni_deneme = models.ExamResult(
         user_id=user.id,
-        exam_name=exam.exam_name,
-        tyt_turkce=exam.tyt_turkce,
-        tyt_sosyal=exam.tyt_sosyal,
-        tyt_mat=exam.tyt_mat,
-        tyt_fen=exam.tyt_fen,
+        exam_name=req.exam_name,
+        tyt_turkce=req.tyt_turkce,
+        tyt_sosyal=req.tyt_sosyal,
+        tyt_mat=req.tyt_mat,
+        tyt_fen=req.tyt_fen,
         tyt_net=toplam_tyt,
-        ayt_net=exam.ayt_net,
+        ayt_net=req.ayt_net,
+        topic_mistakes=req.yanlis_konular, # 👇 YANLIŞLAR KAYDEDİLDİ
         ai_comment=ai_tavsiyesi,
         date=datetime.now()
     )
     db.add(yeni_deneme)
     if user.target: user.target.current_tyt_net = toplam_tyt
     db.commit()
-    return {"mesaj": "Kaydedildi ve Analiz Yapıldı!"}
+    
+    return {"mesaj": "Kaydedildi!", "analiz": ai_tavsiyesi}
 
 @app.get("/deneme-gecmisi")
 def get_exams(user: models.User = Depends(get_current_user)):
@@ -622,50 +482,21 @@ def get_exams(user: models.User = Depends(get_current_user)):
 
 @app.get("/chat-gecmisi", response_model=list[schemas.ChatMessageBase])
 def get_chat_history(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    messages = db.query(models.ChatMessage).filter(models.ChatMessage.user_id == user.id).order_by(models.ChatMessage.created_at.asc()).limit(50).all()
-    return messages
+    return db.query(models.ChatMessage).filter(models.ChatMessage.user_id == user.id).order_by(models.ChatMessage.created_at.asc()).limit(50).all()
 
 @app.get("/istatistikler")
 def get_stats(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     target = user.target
     son_deneme = db.query(models.ExamResult).filter(models.ExamResult.user_id == user.id).order_by(models.ExamResult.date.desc()).first()
     mevcut_tyt = son_deneme.tyt_net if son_deneme else (target.current_tyt_net if target else 0)
-    hedef_tyt = target.target_tyt_net if target else 120
-    basari = int((mevcut_tyt / hedef_tyt) * 100) if hedef_tyt > 0 else 0
     return {
         "mevcut_tyt": mevcut_tyt,
-        "mevcut_ayt": son_deneme.ayt_net if son_deneme else 0,
-        "hedef_tyt": hedef_tyt,
         "hedef_bolum": target.dream_department if target else "Belirsiz",
-        "hedef_uni": target.dream_university if target else "Belirsiz",
-        "basari_orani": basari if basari <= 100 else 100
+        "basari_orani": int((mevcut_tyt / (target.target_tyt_net or 120)) * 100) if target else 0
     }
 
 @app.delete("/deneme-sil/{exam_id}")
 def delete_exam(exam_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    exam = db.query(models.ExamResult).filter(models.ExamResult.id == exam_id, models.ExamResult.user_id == user.id).first()
-    if not exam: raise HTTPException(status_code=404, detail="Deneme bulunamadı")
-    db.delete(exam)
+    db.query(models.ExamResult).filter(models.ExamResult.id == exam_id, models.ExamResult.user_id == user.id).delete()
     db.commit()
-    return {"mesaj": "Deneme silindi"}
-
-@app.put("/deneme-guncelle/{exam_id}")
-def update_exam(exam_id: int, exam_data: schemas.ExamResultCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    exam = db.query(models.ExamResult).filter(models.ExamResult.id == exam_id, models.ExamResult.user_id == user.id).first()
-    if not exam: raise HTTPException(status_code=404, detail="Deneme bulunamadı")
-    
-    toplam_tyt = exam_data.tyt_turkce + exam_data.tyt_sosyal + exam_data.tyt_mat + exam_data.tyt_fen
-    exam.exam_name = exam_data.exam_name
-    exam.tyt_turkce = exam_data.tyt_turkce
-    exam.tyt_sosyal = exam_data.tyt_sosyal
-    exam.tyt_mat = exam_data.tyt_mat
-    exam.tyt_fen = exam_data.tyt_fen
-    exam.tyt_net = toplam_tyt
-    exam.ayt_net = exam_data.ayt_net
-    
-    last_exam = db.query(models.ExamResult).filter(models.ExamResult.user_id == user.id).order_by(models.ExamResult.date.desc()).first()
-    if last_exam and last_exam.id == exam_id and user.target:
-        user.target.current_tyt_net = toplam_tyt
-        
-    db.commit()
-    return {"mesaj": "Deneme güncellendi"}
+    return {"mesaj": "Silindi"}
