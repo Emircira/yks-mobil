@@ -433,17 +433,64 @@ async def solve_question(
         print(f"Hata: {e}")
         return {"cevap": "Görseli okuyamadım."}
 
+# main.py içindeki create_challenge fonksiyonunu sil ve bunu yapıştır:
+
 @app.post("/challenge-olustur")
 def create_challenge(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     try:
-        prompt = "Bana YKS öğrencisi için zorlu görev ver. JSON: {'baslik': '...', 'aciklama': '...', 'sure_dk': 45, 'xp_degeri': 100}"
+      
+        rutbe, _ = calculate_level(user.xp)
+        
+      
+        modlar = [
+            "SPEEDRUN (Hız Testi): Çok kısa sürede çok soru çözmeye odaklı.",
+            "SURVIVOR (Dayanıklılık): Masadan kalkmadan uzun süre odaklanma.",
+            "SNIPER (Nokta Atışı): Sadece en çok yanlış yapılan, zor bir konuya odaklanma.",
+            "ERROR 404 (Hata Avı): Geçmiş denemelerdeki yanlışları tekrar çözme.",
+            "BOSS FIGHT (Zor Soru): Sadece en zor kaynaklardan soru çözme."
+        ]
+        secilen_mod = random.choice(modlar)
+
+        # 3. DİNAMİK PROMPT
+        prompt = f"""
+        ROL: Çılgın bir Oyun Yapımcısı ve YKS Koçu.
+        OYUNCU SEVİYESİ: {rutbe} (Buna uygun zorluk ayarla).
+        SEÇİLEN OYUN MODU: {secilen_mod}
+        
+        GÖREV: Bu moda uygun, heyecan verici bir YKS görevi (Challenge) oluştur.
+        
+        KURALLAR:
+        1. Başlık çok havalı ve oyun terimi içersin.
+        2. Açıklama gaza getirici olsun.
+        3. Süre ve XP, oyuncu seviyesine ({rutbe}) uygun olsun (Usta ise zor, Çaylak ise kolay).
+        4. "Paragraf çöz" gibi sıkıcı şeyler yazma, yaratıcı ol!
+        
+        CEVAP FORMATI (Sadece JSON):
+        {{
+            "baslik": "...",
+            "aciklama": "...",
+            "sure_dk": 45, 
+            "xp_degeri": 150
+        }}
+        """
+
+        if not GOOGLE_API_KEY: 
+            return {"baslik": "Bağlantı Yok", "aciklama": "İnternetini kontrol et savaşçı!", "sure_dk": 0, "xp_degeri": 0}
+
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
         text = response.text.replace("```json", "").replace("```", "").strip()
+        
         return json.loads(text)
-    except:
-        return {"baslik": "Soru Avı", "aciklama": "20 Paragraf sorusu çöz!", "sure_dk": 30, "xp_degeri": 50}
 
+    except Exception as e:
+        
+        fallback_tasks = [
+            {"baslik": "Zamanla Yarış", "aciklama": "20 dakikada 20 Mat sorusu yetiştirebilir misin?", "sure_dk": 20, "xp_degeri": 50},
+            {"baslik": "Yanlışların İntikamı", "aciklama": "Son denemendeki fen yanlışlarını analiz et.", "sure_dk": 40, "xp_degeri": 80},
+            {"baslik": "Sessizlik Yemini", "aciklama": "60 dakika telefon yasak, full odak biyoloji çalış.", "sure_dk": 60, "xp_degeri": 100}
+        ]
+        return random.choice(fallback_tasks)
 @app.post("/deneme-ekle")
 def add_exam(exam: schemas.ExamResultCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     toplam_tyt = exam.tyt_turkce + exam.tyt_sosyal + exam.tyt_mat + exam.tyt_fen
