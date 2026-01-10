@@ -291,77 +291,7 @@ def clear_todos(db: Session = Depends(get_db), user: models.User = Depends(get_c
     db.commit()
     return {"mesaj": f"{count} tamamlanmış görev temizlendi!"}
 
-@app.post("/plan-olustur")
-def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    # 🛑 KATI KURAL: Yarım kalan görevin varsa yeni plan ALAMAZSIN.
-    unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
-    
-    if unfinished_count > 0:
-        raise HTTPException(
-            status_code=406, 
-            detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın! Onlar bitmeden yeni plan yok."
-        )
 
-    try:
-        target = user.target
-        hedef_siralamasi = target.ranking if target and target.ranking else "İlk 10.000"
-        mevcut_tyt = target.current_tyt_net if target else 0
-        
-        # Geçmişi hatırlat ama sohbet etme
-        son_bitenler = db.query(models.Todo).filter(
-            models.Todo.user_id == user.id, 
-            models.Todo.is_completed == True
-        ).order_by(models.Todo.id.desc()).limit(5).all()
-
-        biten_konular_txt = ""
-        if son_bitenler:
-            tasks = [t.content for t in son_bitenler]
-            biten_konular_txt = f"Son bitenler: {', '.join(tasks)}"
-
-        # Sadece görev listesi isteyen sert prompt
-        prompt = f"""
-        ROL: YKS Planlayıcısı.
-        ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. {biten_konular_txt}
-        
-        GÖREV: Bugün için 4 adet nokta atışı çalışma görevi ver.
-        
-        KURALLAR:
-        1. ASLA sohbet etme, giriş cümlesi (Merhabalar vb.) kurma.
-        2. Çıktıyı SADECE şu formatta ver (her satıra bir görev):
-        - TYT Matematik: Sayılar konusundan 2 test
-        - Türkçe: 20 Paragraf sorusu
-        - Geometri: Üçgenler videosu
-        - Fen: Fizik taraması
-        """
-
-        if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
-
-        model = genai.GenerativeModel(MODEL_NAME)
-        response = model.generate_content(prompt)
-        raw_text = response.text.strip()
-        
-        clean_tasks = []
-        for line in raw_text.split("\n"):
-            line = line.strip()
-            if len(line) < 5 or len(line) > 150: continue
-            cleaned_line = line.replace("- ", "").replace("* ", "").replace("1. ", "").strip()
-            clean_tasks.append(cleaned_line)
-
-        final_tasks = clean_tasks[:5]
-        for task in final_tasks:
-            db.add(models.Todo(content=task, user_id=user.id))
-        
-        db.commit()
-        if not final_tasks:
-             db.add(models.Todo(content="Bugünlük serbest tekrar yap.", user_id=user.id))
-             db.commit()
-             
-        return {"mesaj": "Yeni planın eklendi. Bitirmeden gelme!", "gorevler": final_tasks}
-
-    except HTTPException as he: raise he
-    except Exception as e:
-        print(f"Plan Hata: {e}")
-        raise HTTPException(status_code=500, detail="Plan motorunda hata oluştu.")
 
 
 
