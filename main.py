@@ -292,7 +292,91 @@ def clear_todos(db: Session = Depends(get_db), user: models.User = Depends(get_c
     return {"mesaj": f"{count} tamamlanmış görev temizlendi!"}
 
 
+# main.py içindeki create_ai_plan fonksiyonunu sil ve bunu yapıştır:
 
+@app.post("/plan-olustur")
+def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    # 🛑 KATI KURAL: Yarım kalan görevin varsa yeni plan ALAMAZSIN.
+    unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
+    
+    if unfinished_count > 0:
+        raise HTTPException(
+            status_code=406, 
+            detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın! Onlar bitmeden yeni plan yok."
+        )
+
+    try:
+        # --- SEVİYE TESPİTİ VE ZORLUK AYARI ---
+        rutbe, _ = calculate_level(user.xp)
+        
+        zorluk_talimati = ""
+        if rutbe == "Çaylak":
+            zorluk_talimati = "SEVİYE: BAŞLANGIÇ. Öğrenciyi soğutma. Konu anlatımı videoları ağırlıklı olsun. Görev başına en fazla 1 test (10-12 soru) ver."
+        elif rutbe == "Çırak":
+            zorluk_talimati = "SEVİYE: ORTA. Alışmaya başladı. Hem konu hem soru olsun. Görev başına 2 test veya 1 özet çıkarma görevi ver."
+        elif rutbe == "Kalfa":
+            zorluk_talimati = "SEVİYE: İLERİ. Vitesi artır. Artık konu eksiği azaldı. Bol soru çözümü (en az 3 test) ve Branş Denemeleri ekle."
+        else: # Usta ve YKS LORDU
+            zorluk_talimati = "SEVİYE: HARDCORE (DERECE ÖĞRENCİSİ). Acıma. Seri denemeler, zor soru bankalarından 4-5 test, 50+ paragraf sorusu kilitle."
+
+        target = user.target
+        hedef_siralamasi = target.ranking if target and target.ranking else "İlk 10.000"
+        mevcut_tyt = target.current_tyt_net if target else 0
+        
+        # Geçmişi hatırlat
+        son_bitenler = db.query(models.Todo).filter(
+            models.Todo.user_id == user.id, 
+            models.Todo.is_completed == True
+        ).order_by(models.Todo.id.desc()).limit(5).all()
+
+        biten_konular_txt = ""
+        if son_bitenler:
+            tasks = [t.content for t in son_bitenler]
+            biten_konular_txt = f"Son bitenler: {', '.join(tasks)}"
+
+        prompt = f"""
+        ROL: YKS Planlayıcısı.
+        ÖĞRENCİ PROFİLİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. Rütbe: {rutbe}.
+        {zorluk_talimati}
+        GEÇMİŞ: {biten_konular_txt}
+        
+        GÖREV: Bugün için öğrencinin seviyesine (%100 uygun) 4 adet nokta atışı çalışma görevi ver.
+        
+        KURALLAR:
+        1. ASLA sohbet etme, giriş cümlesi kurma.
+        2. Çıktıyı SADECE şu formatta ver (her satıra bir görev):
+        - Ders Adı: Yapılacak İş (Örn: 2 Test Çöz / Video İzle)
+        - Ders Adı: Yapılacak İş
+        """
+
+        if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
+
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(prompt)
+        raw_text = response.text.strip()
+        
+        clean_tasks = []
+        for line in raw_text.split("\n"):
+            line = line.strip()
+            if len(line) < 5 or len(line) > 150: continue
+            cleaned_line = line.replace("- ", "").replace("* ", "").replace("1. ", "").strip()
+            clean_tasks.append(cleaned_line)
+
+        final_tasks = clean_tasks[:5]
+        for task in final_tasks:
+            db.add(models.Todo(content=task, user_id=user.id))
+        
+        db.commit()
+        if not final_tasks:
+             db.add(models.Todo(content="Bugünlük serbest tekrar yap.", user_id=user.id))
+             db.commit()
+             
+        return {"mesaj": f"Seviyen ({rutbe}) için optimize edilmiş plan hazır!", "gorevler": final_tasks}
+
+    except HTTPException as he: raise he
+    except Exception as e:
+        print(f"Plan Hata: {e}")
+        raise HTTPException(status_code=500, detail="Plan motorunda hata oluştu.")
 
 
 @app.post("/ai-soru-sor")
