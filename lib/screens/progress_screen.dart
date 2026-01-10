@@ -14,6 +14,46 @@ class _ProgressScreenState extends State<ProgressScreen> {
   List<dynamic> _exams = [];
   bool _isLoading = true;
 
+  // 👇 1. KONU LİSTESİ (SABİT)
+  final Map<String, List<String>> _dersKonulari = {
+    "Türkçe": [
+      "Paragraf",
+      "Sözcükte Anlam",
+      "Cümlede Anlam",
+      "Ses Bilgisi",
+      "Yazım Kuralları",
+      "Noktalama",
+      "Dil Bilgisi"
+    ],
+    "Sosyal": [
+      "Tarih Bilimine Giriş",
+      "İlk Uygarlıklar",
+      "Coğrafi Konum",
+      "İklim Bilgisi",
+      "Felsefe",
+      "Din Kültürü"
+    ],
+    "Matematik": [
+      "Temel Kavramlar",
+      "Sayı Basamakları",
+      "Problemler",
+      "Fonksiyonlar",
+      "Polinomlar",
+      "PKOB",
+      "Türev",
+      "İntegral",
+      "Geometri"
+    ],
+    "Fen": [
+      "Fizik Bilimine Giriş",
+      "Hareket",
+      "Optik",
+      "Kimyasal Türler",
+      "Hücre",
+      "Canlıların Sınıflandırılması"
+    ],
+  };
+
   @override
   void initState() {
     super.initState();
@@ -21,12 +61,17 @@ class _ProgressScreenState extends State<ProgressScreen> {
   }
 
   Future<void> _loadHistory() async {
-    final data = await _api.getExamHistory();
-    if (mounted) {
-      setState(() {
-        _exams = data;
-        _isLoading = false;
-      });
+    try {
+      final data = await _api.getExamHistory();
+      if (mounted) {
+        setState(() {
+          _exams = data;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+      print("Geçmiş yükleme hatası: $e");
     }
   }
 
@@ -55,6 +100,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
     );
   }
 
+  // 👇 2. GÜNCELLENMİŞ VE KONU SEÇMELİ PENCERE
   void _showExamDialog({Map<String, dynamic>? existingExam}) {
     final nameController = TextEditingController(
       text: existingExam?['exam_name'] ?? '',
@@ -62,22 +108,20 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
     // Ders Netleri (Varsa getir, yoksa boş)
     final turkceController = TextEditingController(
-      text: existingExam?['tyt_turkce']?.toString() ?? '',
-    );
+        text: existingExam?['tyt_turkce']?.toString() ?? '');
     final sosyalController = TextEditingController(
-      text: existingExam?['tyt_sosyal']?.toString() ?? '',
-    );
-    final matController = TextEditingController(
-      text: existingExam?['tyt_mat']?.toString() ?? '',
-    );
-    final fenController = TextEditingController(
-      text: existingExam?['tyt_fen']?.toString() ?? '',
-    );
-    final aytController = TextEditingController(
-      text: existingExam?['ayt_net']?.toString() ?? '',
-    );
+        text: existingExam?['tyt_sosyal']?.toString() ?? '');
+    final matController =
+        TextEditingController(text: existingExam?['tyt_mat']?.toString() ?? '');
+    final fenController =
+        TextEditingController(text: existingExam?['tyt_fen']?.toString() ?? '');
+    final aytController =
+        TextEditingController(text: existingExam?['ayt_net']?.toString() ?? '');
 
     bool isEditing = existingExam != null;
+
+    // Seçilen yanlışları tutacak değişken (Sadece ekleme yaparken kullanıyoruz şimdilik)
+    Map<String, int> secilenYanlislar = {};
 
     showDialog(
       context: context,
@@ -101,10 +145,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
               const SizedBox(height: 15),
               const Text(
                 "TYT DETAYLARI",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.teal,
-                ),
+                style:
+                    TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
               ),
               const SizedBox(height: 10),
 
@@ -126,13 +168,101 @@ class _ProgressScreenState extends State<ProgressScreen> {
                 ],
               ),
 
+              const SizedBox(height: 20),
+
+              // 👇👇👇 KONU SEÇME BUTONU BURADA 👇👇👇
+              OutlinedButton.icon(
+                icon: const Icon(Icons.playlist_add_check,
+                    color: Colors.deepOrange),
+                label: const Text("Yanlış Yaptığım Konuları Seç",
+                    style: TextStyle(color: Colors.deepOrange)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.deepOrange),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+                ),
+                onPressed: () {
+                  // İkinci bir pencere açıyoruz (Topic Selector)
+                  showDialog(
+                    context: context,
+                    builder: (ctx) {
+                      return AlertDialog(
+                        title: const Text("Hangi Konularda Yanlışın Var?"),
+                        content: SizedBox(
+                          width: double.maxFinite,
+                          child: SingleChildScrollView(
+                            child: StatefulBuilder(
+                              builder: (context, setInnerState) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: _dersKonulari.entries.map((entry) {
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              top: 10, bottom: 5),
+                                          child: Text(entry.key,
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.teal)),
+                                        ),
+                                        Wrap(
+                                          spacing: 6.0,
+                                          runSpacing: 0.0,
+                                          children: entry.value.map((konu) {
+                                            bool isSelected = secilenYanlislar
+                                                .containsKey(konu);
+                                            return FilterChip(
+                                              label: Text(konu,
+                                                  style: const TextStyle(
+                                                      fontSize: 12)),
+                                              selected: isSelected,
+                                              selectedColor:
+                                                  Colors.orange.shade100,
+                                              checkmarkColor: Colors.deepOrange,
+                                              onSelected: (val) {
+                                                setInnerState(() {
+                                                  if (val) {
+                                                    secilenYanlislar[konu] =
+                                                        1; // Varsayılan 1 yanlış
+                                                  } else {
+                                                    secilenYanlislar
+                                                        .remove(konu);
+                                                  }
+                                                });
+                                              },
+                                            );
+                                          }).toList(),
+                                        ),
+                                        const Divider(),
+                                      ],
+                                    );
+                                  }).toList(),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text("Tamam"),
+                          )
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+              // 👆👆👆 KONU SEÇME BUTONU BİTTİ 👆👆👆
+
               const Divider(height: 30),
               const Text(
                 "AYT TOPLAM",
                 style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.indigo,
-                ),
+                    fontWeight: FontWeight.bold, color: Colors.indigo),
               ),
               const SizedBox(height: 10),
 
@@ -166,9 +296,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
               if (tr > 40 || sos > 20 || mat > 40 || fen > 20 || ayt > 80) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text(
-                      "⚠️ Hatalı Net Girişi! Soru sayılarını aştın.",
-                    ),
+                    content:
+                        Text("⚠️ Hatalı Net Girişi! Soru sayılarını aştın."),
                     backgroundColor: Colors.red,
                   ),
                 );
@@ -178,20 +307,31 @@ class _ProgressScreenState extends State<ProgressScreen> {
               Navigator.pop(context);
               setState(() => _isLoading = true);
 
-              if (isEditing) {
-                await _api.updateExam(
-                  existingExam['id'],
-                  nameController.text,
-                  tr,
-                  sos,
-                  mat,
-                  fen,
-                  ayt,
+              try {
+                if (isEditing) {
+                  // Not: Düzenleme için de ileride mistakes eklenebilir
+                  await _api.updateExam(
+                    existingExam['id'],
+                    nameController.text,
+                    tr,
+                    sos,
+                    mat,
+                    fen,
+                    ayt,
+                  );
+                } else {
+                  // 👇 API'YE SECILEN YANLISLARI DA GÖNDERİYORUZ
+                  await _api.addExam(nameController.text, tr, sos, mat, fen,
+                      ayt, secilenYanlislar);
+                }
+                _loadHistory();
+              } catch (e) {
+                setState(() => _isLoading = false);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content: Text("Hata: $e"), backgroundColor: Colors.red),
                 );
-              } else {
-                await _api.addExam(nameController.text, tr, sos, mat, fen, ayt);
               }
-              _loadHistory();
             },
             child: const Text("Kaydet", style: TextStyle(color: Colors.white)),
           ),

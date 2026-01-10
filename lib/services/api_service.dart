@@ -89,17 +89,13 @@ class ApiService {
       );
       return null; // Başarılıysa null döner
     } on DioException catch (e) {
-      // --- BURASI DÜZELTİLDİ ---
-      // Gelen veri JSON mu (Map) yoksa düz Yazı mı (String) kontrol ediyoruz.
       final data = e.response?.data;
 
       if (data == null) return "Sunucuya bağlanılamadı.";
 
       if (data is Map) {
-        // Eğer JSON ise 'detail' kısmını al
         return data['detail'] ?? "Kayıt hatası.";
       } else if (data is String) {
-        // Eğer düz yazıysa direkt yazıyı döndür
         return data;
       }
 
@@ -319,6 +315,7 @@ class ApiService {
     }
   }
 
+  // 👇 GÜNCELLENEN KISIM BURASI 👇
   Future<bool> addExam(
     String name,
     double turkce,
@@ -326,6 +323,7 @@ class ApiService {
     double mat,
     double fen,
     double ayt,
+    Map<String, int> mistakes, // EKLENDİ
   ) async {
     try {
       final options = await _getAuthOptions();
@@ -338,11 +336,13 @@ class ApiService {
           "tyt_mat": mat,
           "tyt_fen": fen,
           "ayt_net": ayt,
+          "yanlis_konular": mistakes, // EKLENDİ
         },
         options: options,
       );
       return true;
     } catch (e) {
+      print("Deneme Ekleme Hatası: $e");
       return false;
     }
   }
