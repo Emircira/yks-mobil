@@ -435,62 +435,72 @@ async def solve_question(
 
 # main.py içindeki create_challenge fonksiyonunu sil ve bunu yapıştır:
 
+# main.py içindeki create_challenge fonksiyonunu sil ve bunu yapıştır:
+
 @app.post("/challenge-olustur")
 def create_challenge(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     try:
-      
+        # 1. KULLANICI SEVİYESİNİ BUL
         rutbe, _ = calculate_level(user.xp)
         
-      
-        modlar = [
-            "SPEEDRUN (Hız Testi): Çok kısa sürede çok soru çözmeye odaklı.",
-            "SURVIVOR (Dayanıklılık): Masadan kalkmadan uzun süre odaklanma.",
-            "SNIPER (Nokta Atışı): Sadece en çok yanlış yapılan, zor bir konuya odaklanma.",
-            "ERROR 404 (Hata Avı): Geçmiş denemelerdeki yanlışları tekrar çözme.",
-            "BOSS FIGHT (Zor Soru): Sadece en zor kaynaklardan soru çözme."
-        ]
-        secilen_mod = random.choice(modlar)
+        # 2. GÜNDEM ANALİZİ (Sürekli aynı konu gelmesin diye)
+        # Kullanıcının son eklediği görevlere bakıp konuyu oradan seçiyoruz.
+        son_gorevler = db.query(models.Todo).filter(models.Todo.user_id == user.id).order_by(models.Todo.id.desc()).limit(3).all()
+        
+        konu_baglam = "Genel YKS (Rastgele Zor Konu)"
+        if son_gorevler:
+            konu_ozetleri = ", ".join([t.content for t in son_gorevler])
+            konu_baglam = f"Öğrencinin şu an çalıştığı konular: {konu_ozetleri}. Challenge BU KONULARDAN BİRİYLE ilgili olsun."
 
-        # 3. DİNAMİK PROMPT
+        # 3. ZORLUK AYARI (Seviyeye göre soru sayısı)
+        soru_hedefi = "20 soru"
+        if rutbe == "Usta" or rutbe == "YKS LORDU":
+            soru_hedefi = "en az 60 zor soru"
+        elif rutbe == "Kalfa":
+            soru_hedefi = "40 soru"
+        
+        # 4. GÜÇLÜ PROMPT
         prompt = f"""
-        ROL: Çılgın bir Oyun Yapımcısı ve YKS Koçu.
-        OYUNCU SEVİYESİ: {rutbe} (Buna uygun zorluk ayarla).
-        SEÇİLEN OYUN MODU: {secilen_mod}
+        ROL: Oyun Yapımcısı ve Sert YKS Koçu.
+        OYUNCU: {rutbe} seviyesinde.
+        KONU SEÇİMİ: {konu_baglam}
         
-        GÖREV: Bu moda uygun, heyecan verici bir YKS görevi (Challenge) oluştur.
+        GÖREV: Öğrenciye meydan okuyan, oyun diliyle yazılmış (Boss Fight, Critical Hit vb.) bir metin yaz.
         
-        KURALLAR:
-        1. Başlık çok havalı ve oyun terimi içersin.
-        2. Açıklama gaza getirici olsun.
-        3. Süre ve XP, oyuncu seviyesine ({rutbe}) uygun olsun (Usta ise zor, Çaylak ise kolay).
-        4. "Paragraf çöz" gibi sıkıcı şeyler yazma, yaratıcı ol!
+        ÇOK ÖNEMLİ KURAL:
+        Metin gaza getirici olsun AMA mutlaka içinde SOMUT BİR GÖREV barındırsın.
+        Metnin sonuna "GÖREVİN: [Konu Adı] konusundan süre tutarak {soru_hedefi} çözmek!" gibi net bir emir ekle.
         
-        CEVAP FORMATI (Sadece JSON):
+        CEVAP FORMATI (JSON):
         {{
-            "baslik": "...",
-            "aciklama": "...",
-            "sure_dk": 45, 
+            "baslik": "Kısa ve Epik Başlık (Örn: Türev Boss Savaşı)",
+            "aciklama": "Hikayeli motivasyon metni + NET GÖREV TANIMI.",
+            "sure_dk": 60, 
             "xp_degeri": 150
         }}
         """
 
-        if not GOOGLE_API_KEY: 
-            return {"baslik": "Bağlantı Yok", "aciklama": "İnternetini kontrol et savaşçı!", "sure_dk": 0, "xp_degeri": 0}
+        if not GOOGLE_API_KEY: raise Exception("API Yok")
 
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
-        text = response.text.replace("```json", "").replace("```", "").strip()
+        
+        # Temizlik
+        text = response.text.strip()
+        if "```" in text:
+            text = text.replace("```json", "").replace("```", "").strip()
         
         return json.loads(text)
 
     except Exception as e:
-        
-        fallback_tasks = [
-            {"baslik": "Zamanla Yarış", "aciklama": "20 dakikada 20 Mat sorusu yetiştirebilir misin?", "sure_dk": 20, "xp_degeri": 50},
-            {"baslik": "Yanlışların İntikamı", "aciklama": "Son denemendeki fen yanlışlarını analiz et.", "sure_dk": 40, "xp_degeri": 80},
-            {"baslik": "Sessizlik Yemini", "aciklama": "60 dakika telefon yasak, full odak biyoloji çalış.", "sure_dk": 60, "xp_degeri": 100}
-        ]
-        return random.choice(fallback_tasks)
+        print(f"Challenge Hata: {e}")
+        # Hata durumunda yedek plan (Yine kullanıcının seviyesine uygun hissettiren)
+        return {
+            "baslik": "Meydan Okuma Başladı", 
+            "aciklama": "Sistem anlık olarak sana özel görev oluşturamadı ama durmak yok! Masaya geç ve en zorlandığın dersten 40 soru çözerek bu bug'ı yen!", 
+            "sure_dk": 45, 
+            "xp_degeri": 75
+        }
 @app.post("/deneme-ekle")
 def add_exam(exam: schemas.ExamResultCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     toplam_tyt = exam.tyt_turkce + exam.tyt_sosyal + exam.tyt_mat + exam.tyt_fen
