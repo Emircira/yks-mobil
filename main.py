@@ -500,3 +500,25 @@ def delete_exam(exam_id: int, db: Session = Depends(get_db), user: models.User =
     db.query(models.ExamResult).filter(models.ExamResult.id == exam_id, models.ExamResult.user_id == user.id).delete()
     db.commit()
     return {"mesaj": "Silindi"}
+from sqlalchemy import text
+
+from sqlalchemy import text
+
+@app.get("/tabloyu-duzelt")
+def fix_table_schema(db: Session = Depends(get_db)):
+    """
+    BU FONKSİYON SADECE TEK SEFERLİK KULLANIM İÇİNDİR.
+    Eski 'exam_results' tablosunu siler ve yenisini (yeni sütunlarla) oluşturur.
+    DİKKAT: Eski deneme kayıtların silinir!
+    """
+    try:
+        # 1. Eski tabloyu zorla sil
+        db.execute(text("DROP TABLE IF EXISTS exam_results CASCADE;"))
+        db.commit()
+        
+        # 2. Modellerdeki yeni yapıya göre tabloyu tekrar oluştur
+        models.Base.metadata.create_all(bind=engine)
+        
+        return {"durum": "BAŞARILI", "mesaj": "ExamResult tablosu silindi ve 'topic_mistakes' sütunuyla yeniden oluşturuldu. Artık deneme ekleyebilirsin!"}
+    except Exception as e:
+        return {"durum": "HATA", "hata": str(e)}
