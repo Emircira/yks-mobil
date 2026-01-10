@@ -293,11 +293,13 @@ def clear_todos(db: Session = Depends(get_db), user: models.User = Depends(get_c
 
 @app.post("/plan-olustur")
 def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    # 🛑 KATI KURAL: Yarım kalan görevin varsa yeni plan ALAMAZSIN.
     unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
+    
     if unfinished_count > 0:
         raise HTTPException(
             status_code=406, 
-            detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın! Yarım iş sevmem."
+            detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın! Onlar bitmeden yeni plan yok."
         )
 
     try:
@@ -305,33 +307,31 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         hedef_siralamasi = target.ranking if target and target.ranking else "İlk 10.000"
         mevcut_tyt = target.current_tyt_net if target else 0
         
-        # --- Prompt Hazırlığı ---
+        # Geçmişi hatırlat ama sohbet etme
         son_bitenler = db.query(models.Todo).filter(
             models.Todo.user_id == user.id, 
             models.Todo.is_completed == True
         ).order_by(models.Todo.id.desc()).limit(5).all()
 
-        biten_konular_txt = "Henüz başlangıç seviyesindesin."
+        biten_konular_txt = ""
         if son_bitenler:
             tasks = [t.content for t in son_bitenler]
-            biten_konular_txt = f"En son şunları bitirdin: {', '.join(tasks)}"
+            biten_konular_txt = f"Son bitenler: {', '.join(tasks)}"
 
-        # 👇 BURAYI DEĞİŞTİRDİK: Formatı JSON'a zorluyoruz ki saçma yazılar gelmesin.
+        # Sadece görev listesi isteyen sert prompt
         prompt = f"""
-        ROL: YKS Müfredat Planlayıcısı.
-        ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}.
-        DURUM: {biten_konular_txt}
-
-        GÖREV: Bugün için 4 adet NET, KISA ve ÖZ ders çalışma görevi ver.
+        ROL: YKS Planlayıcısı.
+        ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. {biten_konular_txt}
+        
+        GÖREV: Bugün için 4 adet nokta atışı çalışma görevi ver.
         
         KURALLAR:
-        1. Asla "Merhaba", "Tamamdır" gibi giriş cümleleri kurma.
-        2. Sadece yapılacak işi yaz.
-        3. Çıktıyı tam olarak şu formatta ver (her satıra bir görev):
-        - TYT Matematik: Sayılar konusundan 2 test çöz
-        - TYT Türkçe: Paragraf taktikleri videosu izle
-        - Geometri: Üçgenler konu tekrarı
-        - TYT Fen: Fizik bilimine giriş testi
+        1. ASLA sohbet etme, giriş cümlesi (Merhabalar vb.) kurma.
+        2. Çıktıyı SADECE şu formatta ver (her satıra bir görev):
+        - TYT Matematik: Sayılar konusundan 2 test
+        - Türkçe: 20 Paragraf sorusu
+        - Geometri: Üçgenler videosu
+        - Fen: Fizik taraması
         """
 
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
@@ -340,36 +340,30 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         
-        # 👇 TEMİZLİK ROBOTU: Sadece "-" veya "*" ile başlayan satırları alacağız.
         clean_tasks = []
         for line in raw_text.split("\n"):
             line = line.strip()
-            # Eğer satır boşsa veya çok uzun bir açıklama metniyse (150 karakterden uzun) alma.
-            if len(line) < 5 or len(line) > 150: 
-                continue
-            
-            # Başındaki işaretleri temizle
+            if len(line) < 5 or len(line) > 150: continue
             cleaned_line = line.replace("- ", "").replace("* ", "").replace("1. ", "").strip()
             clean_tasks.append(cleaned_line)
 
-        # En fazla 5 görev alalım
         final_tasks = clean_tasks[:5]
-
         for task in final_tasks:
             db.add(models.Todo(content=task, user_id=user.id))
         
         db.commit()
-        # Eğer hiç görev çıkmadıysa manuel bir tane ekle
         if not final_tasks:
-             db.add(models.Todo(content="Bugünlük serbest çalış, plan oluşturulamadı.", user_id=user.id))
+             db.add(models.Todo(content="Bugünlük serbest tekrar yap.", user_id=user.id))
              db.commit()
              
-        return {"mesaj": "Planın hazır!", "gorevler": final_tasks}
+        return {"mesaj": "Yeni planın eklendi. Bitirmeden gelme!", "gorevler": final_tasks}
 
     except HTTPException as he: raise he
     except Exception as e:
         print(f"Plan Hata: {e}")
         raise HTTPException(status_code=500, detail="Plan motorunda hata oluştu.")
+
+
 
 @app.post("/ai-soru-sor")
 def ask_tutor(req: SoruIstegi, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
@@ -380,35 +374,59 @@ def ask_tutor(req: SoruIstegi, db: Session = Depends(get_db), user: models.User 
         profil_ozeti = f"""
         İsim: {user.username}
         Hedef: {target.ranking if target else 'İlk 10.000'}
-        Seviye: {calculate_level(user.xp)[0]}
         """
 
-        system_instruction = f"Sen YKS Koçusun. Bilgiler: {profil_ozeti}."
+        
+        system_instruction = f"""
+        Sen YKS Koçusun. Bilgiler: {profil_ozeti}.
+        
+        TARZIN:
+        1. Öğrenciyi soru yağmuruna tutma. Sadece sorusuna odaklan.
+        2. Kısa, net ve çözüm odaklı ol.
+        3. Motivasyon ver ama boş yapma.
+        
+        ÖNEMLİ - GÖREV SİSTEMİ:
+        Eğer cevabında öğrenciye "Şunu çalış, bunu çöz" dersen, cümlenin EN SONUNA şu kodu ekle:
+        GOREV_EKLE: <Buraya Yapılacak İşi 3-4 Kelimeyle Yaz>
+        
+        Örnek Cevap:
+        "Türevde zorlanman normal, bol soru çözmelisin.
+        GOREV_EKLE: Türev Çözümlü Video İzle"
+        """
+        
         full_prompt = f"{system_instruction}\n\nÖğrenci Sorusu: {req.soru_metni}"
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(full_prompt)
         final_answer = response.text
 
-        # Görev Ekleme Kontrolü
-        try:
-            if "GOREV_EKLE:" in final_answer:
-                parts = final_answer.split("GOREV_EKLE:")
-                final_answer = parts[0].strip()
-                task = parts[1].strip().replace("**", "")
-                db.add(models.Todo(user_id=user.id, content=f"🤖 Hoca: {task}"))
+        
+        ai_reply_to_show = final_answer
+        
+        
+        if "GOREV_EKLE:" in final_answer:
+            parts = final_answer.split("GOREV_EKLE:")
+            ai_reply_to_show = parts[0].strip() # Kullanıcıya sadece sohbeti göster
+            
+            raw_task = parts[1].strip()
+            clean_task = raw_task.replace("*", "").replace("-", "").replace(".", "").strip()
+            
+            # Veritabanına (Planlarım Listesine) Ekle
+            try:
+                
+                new_todo = models.Todo(user_id=user.id, content=f"🤖 Hoca: {clean_task}")
+                db.add(new_todo)
+                db.commit()
+            except:
+                db.rollback()
 
-            db.add(models.ChatMessage(user_id=user.id, user_question=req.soru_metni, ai_response=final_answer))
-            db.commit()
-        except:
-            db.rollback()
+        db.add(models.ChatMessage(user_id=user.id, user_question=req.soru_metni, ai_response=ai_reply_to_show))
+        db.commit()
 
-        return {"cevap": final_answer}
+        return {"cevap": ai_reply_to_show}
     except Exception as e:
         print(f"AI Hata: {e}")
         return {"cevap": f"Hata: {str(e)}"}
-
-# main.py içindeki ai_analyze fonksiyonunu sil ve bunu yapıştır:
 
 @app.post("/ai-koc-analiz")
 def ai_analyze(req: AiGoalRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
