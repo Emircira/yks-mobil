@@ -288,7 +288,7 @@ def clear_todos(db: Session = Depends(get_db), user: models.User = Depends(get_c
 
 @app.post("/plan-olustur")
 def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    # 1. Yarım kalan iş kontrolü (Disiplin Şart)
+    # 1. Yarım kalan iş kontrolü
     unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
     if unfinished_count > 0:
         raise HTTPException(status_code=406, detail=f"🚫 Önce elindeki {unfinished_count} görevi bitir! Yarım iş bırakma.")
@@ -299,54 +299,43 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         target = user.target
         hedef_siralamasi = target.ranking if target and target.ranking else "İlk 20.000"
         
-        # 3. TYT/AYT DENGE STRATEJİSİ (GÜNCELLENDİ) 🚀
-        # Mantık: Seviye arttıkça TYT 'Konu'sundan 'Deneme'sine dönüşür.
-        
+        # 3. TYT/AYT DENGE STRATEJİSİ
         odak_konusu = ""
-        
         if rutbe == "Çaylak":
-            # Başlangıç: Sadece konu öğren
-            odak_konusu = "DURUM: %100 TYT KONU. Öğrenci yeni başlıyor. Temel Matematik, Paragraf ve Dil Bilgisi konuları ver."
-            
+            odak_konusu = "DURUM: %100 TYT KONU. Temel Matematik, Paragraf ve Dil Bilgisi konuları ver."
         elif rutbe == "Çırak":
-            # Geçiş: Konular bitiyor, ufak denemeler başlasın
-            odak_konusu = "DURUM: %70 TYT - %30 AYT. TYT konularını bitirmeye odaklan ama mutlaka günlük 1 adet 'Türkçe Branş Denemesi' veya 'Sosyal Denemesi' ekle."
-            
+            odak_konusu = "DURUM: %70 TYT - %30 AYT. TYT konuları ağırlıklı ama araya Türkçe Branş Denemesi ekle."
         elif rutbe == "Kalfa":
-            # Kritik Dönem: AYT çalışırken TYT unutulmamalı!
-            odak_konusu = """
-            DURUM: %40 TYT (DENEME) - %60 AYT (KONU).
-            ÖNEMLİ: Öğrenci ağırlıklı olarak AYT (Türev, İntegral, Sistemler vb.) çalışacak.
-            ANCAK: TYT bitmesin! Görevlerin arasına MUTLAKA '1 adet TYT Genel Deneme' veya 'TYT Matematik Branş Denemesi' sıkıştır.
-            """
-            
-        else: # Usta ve Lord
-            # Final Dönemi: Full Deneme
-            odak_konusu = "DURUM: %100 SINAV MODU. Konu çalışmayı azalt. Seri TYT ve AYT Denemeleri ver. En zor kaynaklardan soru çözdür."
+            odak_konusu = "DURUM: %40 TYT (DENEME) - %60 AYT (KONU). AYT ağırlıklı git ama mutlaka 'TYT Genel Deneme' veya 'Matematik Branş Denemesi' ekle."
+        else: 
+            odak_konusu = "DURUM: %100 SINAV MODU. Seri TYT ve AYT Denemeleri ver. Zor kaynaklara yönlendir."
 
-        # Geçmiş bitenleri hatırlat (Aynı şeyi verme)
+        # Geçmiş bitenleri hatırlat
         son_bitenler = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == True).order_by(models.Todo.id.desc()).limit(10).all()
         biten_txt = ", ".join([t.content for t in son_bitenler]) if son_bitenler else "Yok"
 
-        # 4. YAPAY ZEKA PROMPTU
+        # 4. GÜÇLENDİRİLMİŞ PROMPT (EMİR KİPİ + SOHBET YASAK)
         prompt = f"""
-        ROL: YKS Koçu ve Müfredat Uzmanı.
+        ROL: Disiplinli YKS Koçu.
         ÖĞRENCİ: {rutbe} seviyesinde. Hedef: {hedef_siralamasi}.
         
-        GEÇMİŞTE BİTİRİLEN KONULAR: {biten_txt}.
+        GEÇMİŞTE YAPILANLAR: {biten_txt}.
+        STRATEJİ: {odak_konusu}
         
-        KURAL 1 (SÜREKLİLİK): Yukarıda bitirilen konulara bak ve müfredattaki BİR SONRAKİ mantıklı konuyu belirle.
-        Örneğin: Öğrenci 'Türev' bitirdiyse, ona rastgele 'Kümeler' verme, 'İntegral' ver. Zinciri koparma.
-        
-        KURAL 2 (DENGE):
-        {odak_konusu}
+        KURALLAR:
+        1. ASLA "Öğrenci yapsın", "izlesin" gibi 3. şahıs dili kullanma.
+        2. DOĞRUDAN EMİR VER: "Çöz", "İzle", "Bitir", "Tekrarla".
+        3. ASLA sohbet etme, giriş cümlesi yazma (Örn: 'Harika program hazırladım' DEME). Sadece 4 maddeyi alt alta yaz.
+        4. Müfredat sırasına uy.
         
         GÖREV:
         Bugün için 4 adet nokta atışı görev yaz.
         
-        FORMAT:
-        - [Ders]: [Konu] - [Detay: Video mu izlesin, test mi çözsün?]
+        FORMAT ÖRNEĞİ:
+        - [Matematik]: Üslü Sayılar - [Mert Hoca'dan konu videosunu izle ve 3 test bitir.]
+        - [Türkçe]: Paragraf - [Süre tutarak 20 paragraf sorusu çöz.]
         """
+
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
 
         model = genai.GenerativeModel(MODEL_NAME)
@@ -357,16 +346,22 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         clean_tasks = []
         for line in raw_text.split("\n"):
             line = line.strip()
-            if len(line) < 5: continue
-            cleaned_line = line.replace("- ", "").replace("* ", "").strip()
+            # Kısa veya boş satırları atla
+            if len(line) < 10: continue
+            # Yıldızları ve tireleri temizle
+            cleaned_line = line.replace("* ", "").strip()
+            if cleaned_line.startswith("- "): 
+                cleaned_line = cleaned_line[2:]
+            
             clean_tasks.append(cleaned_line)
 
-        final_tasks = clean_tasks[:5]
+        # İlk 4 görevi al ve kaydet
+        final_tasks = clean_tasks[:4]
         for task in final_tasks:
             db.add(models.Todo(content=task, user_id=user.id))
         
         db.commit()
-        return {"mesaj": f"{rutbe} stratejisi uygulandı: TYT/AYT dengesi kuruldu!", "gorevler": final_tasks}
+        return {"mesaj": "Yeni görevlerin hazır komutan!", "gorevler": final_tasks}
 
     except Exception as e:
         print(f"Plan Hata: {e}")
