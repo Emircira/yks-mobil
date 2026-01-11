@@ -296,7 +296,7 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. Rütbe: {rutbe}.
         GEÇMİŞ: {biten_konular_txt}
         ZORLUK: {zorluk}
-        GÖREV: Bugün için 4 adet nokta atışı görev ver.
+        GÖREV: Bugün için 5 adet nokta atışı görev ver.
         Her gün Türkçe 20 paragraf sorusu ve TYT Matematik Problemlerden 20 soru ver.
         Her gün müfredata bağlı kal.
         KURALLAR: ASLA sohbet etme. SADECE liste ver.
