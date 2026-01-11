@@ -60,10 +60,23 @@ Base.metadata.create_all(bind=engine)
 # --- YARDIMCI FONKSİYONLAR ---
 
 def calculate_level(xp):
-    if xp < 150: return "Çaylak", xp/150
-    if xp < 500: return "Çırak", (xp-150)/350
-    if xp < 1500: return "Kalfa", (xp-500)/1000
-    if xp < 3000: return "Usta", (xp-1500)/1500
+    # ÇAYLAK: 0 - 1.000 XP (Alışma Evresi)
+    if xp < 1000: 
+        return "Çaylak", xp / 1000
+    
+    # ÇIRAK: 1.000 - 5.000 XP (Temel Atma - Yaklaşık 1-2 Ay)
+    if xp < 5000: 
+        return "Çırak", (xp - 1000) / 4000
+    
+    # KALFA: 5.000 - 15.000 XP (Gelişme Dönemi - Yıl Ortası)
+    if xp < 15000: 
+        return "Kalfa", (xp - 5000) / 10000
+    
+    # USTA: 15.000 - 30.000 XP (Ustalaşma - Son Düzlük)
+    if xp < 30000: 
+        return "Usta", (xp - 15000) / 15000
+        
+    # YKS LORDU: 30.000+ XP (Artık Sınava Hazırsın)
     return "YKS LORDU", 1.0
 
 def normalize_password(password: str) -> str:
@@ -271,37 +284,66 @@ def clear_todos(db: Session = Depends(get_db), user: models.User = Depends(get_c
     db.commit()
     return {"mesaj": f"{count} tamamlanmış görev temizlendi!"}
 
+# main.py içindeki create_ai_plan fonksiyonunu sil ve bunu yapıştır:
+
 @app.post("/plan-olustur")
 def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    # 1. Yarım kalan iş kontrolü (Disiplin Şart)
     unfinished_count = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == False).count()
     if unfinished_count > 0:
-        raise HTTPException(status_code=406, detail=f"🚫 Önce elindeki {unfinished_count} görevi tamamlamalısın!")
+        raise HTTPException(status_code=406, detail=f"🚫 Önce elindeki {unfinished_count} görevi bitir! Yarım iş bırakma.")
 
     try:
+        # 2. SEVİYE ve XP HESAPLA
         rutbe, _ = calculate_level(user.xp)
         target = user.target
-        hedef_siralamasi = target.ranking if target and target.ranking else "İlk 10.000"
-        mevcut_tyt = target.current_tyt_net if target else 0
+        hedef_siralamasi = target.ranking if target and target.ranking else "İlk 20.000"
         
-        son_bitenler = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == True).order_by(models.Todo.id.desc()).limit(5).all()
-        biten_konular_txt = ""
-        if son_bitenler:
-            tasks = [t.content for t in son_bitenler]
-            biten_konular_txt = f"Son bitenler: {', '.join(tasks)}"
+        # 3. TYT/AYT DENGE STRATEJİSİ (GÜNCELLENDİ) 🚀
+        # Mantık: Seviye arttıkça TYT 'Konu'sundan 'Deneme'sine dönüşür.
         
-        zorluk = "Zor" if rutbe in ["Usta", "YKS LORDU"] else "Orta"
+        odak_konusu = ""
+        
+        if rutbe == "Çaylak":
+            # Başlangıç: Sadece konu öğren
+            odak_konusu = "DURUM: %100 TYT KONU. Öğrenci yeni başlıyor. Temel Matematik, Paragraf ve Dil Bilgisi konuları ver."
+            
+        elif rutbe == "Çırak":
+            # Geçiş: Konular bitiyor, ufak denemeler başlasın
+            odak_konusu = "DURUM: %70 TYT - %30 AYT. TYT konularını bitirmeye odaklan ama mutlaka günlük 1 adet 'Türkçe Branş Denemesi' veya 'Sosyal Denemesi' ekle."
+            
+        elif rutbe == "Kalfa":
+            # Kritik Dönem: AYT çalışırken TYT unutulmamalı!
+            odak_konusu = """
+            DURUM: %40 TYT (DENEME) - %60 AYT (KONU).
+            ÖNEMLİ: Öğrenci ağırlıklı olarak AYT (Türev, İntegral, Sistemler vb.) çalışacak.
+            ANCAK: TYT bitmesin! Görevlerin arasına MUTLAKA '1 adet TYT Genel Deneme' veya 'TYT Matematik Branş Denemesi' sıkıştır.
+            """
+            
+        else: # Usta ve Lord
+            # Final Dönemi: Full Deneme
+            odak_konusu = "DURUM: %100 SINAV MODU. Konu çalışmayı azalt. Seri TYT ve AYT Denemeleri ver. En zor kaynaklardan soru çözdür."
 
+        # Geçmiş bitenleri hatırlat (Aynı şeyi verme)
+        son_bitenler = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == True).order_by(models.Todo.id.desc()).limit(10).all()
+        biten_txt = ", ".join([t.content for t in son_bitenler]) if son_bitenler else "Yok"
+
+        # 4. YAPAY ZEKA PROMPTU
         prompt = f"""
-        ROL: YKS Planlayıcısı.
-        ÖĞRENCİ: Hedef {hedef_siralamasi}, Mevcut Net {mevcut_tyt}. Rütbe: {rutbe}.
-        GEÇMİŞ: {biten_konular_txt}
-        ZORLUK: {zorluk}
-        GÖREV: Bugün için 5 adet nokta atışı görev ver.
-        Her gün Türkçe 20 paragraf sorusu ve TYT Matematik Problemlerden 20 soru ver.
-        Her gün müfredata bağlı kal.
-        KURALLAR: ASLA sohbet etme. SADECE liste ver.
-        FORMAT:
-        - Ders: Görev
+        ROL: Profesyonel ve Stratejik YKS Koçu.
+        ÖĞRENCİ: {rutbe} seviyesinde. Hedef: {hedef_siralamasi}.
+        
+        STRATEJİ:
+        {odak_konusu}
+        
+        GEÇMİŞTE YAPILANLAR: {biten_txt} (Bunları tekrar verme).
+        
+        GÖREV:
+        Bugün için 4 adet nokta atışı görev oluştur.
+        Eğer öğrenci AYT çalışıyorsa (Kalfa/Usta), araya mutlaka bir TYT Denemesi (Branş/Genel) sıkıştırarak hamlamasını engelle.
+        
+        FORMAT (Sadece liste):
+        - [Ders]: [Net ve Somut Görev]
         """
 
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
@@ -310,6 +352,7 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         
+        # Temizleme
         clean_tasks = []
         for line in raw_text.split("\n"):
             line = line.strip()
@@ -322,9 +365,11 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
             db.add(models.Todo(content=task, user_id=user.id))
         
         db.commit()
-        return {"mesaj": "Plan hazır!", "gorevler": final_tasks}
+        return {"mesaj": f"{rutbe} stratejisi uygulandı: TYT/AYT dengesi kuruldu!", "gorevler": final_tasks}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Hata oluştu")
+        print(f"Plan Hata: {e}")
+        raise HTTPException(status_code=500, detail="Plan oluşturulamadı.")
 
 @app.post("/ai-soru-sor")
 def ask_tutor(req: SoruIstegi, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
