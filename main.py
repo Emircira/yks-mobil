@@ -294,46 +294,61 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         raise HTTPException(status_code=406, detail=f"🚫 Önce elindeki {unfinished_count} görevi bitir! Yarım iş bırakma.")
 
     try:
-        # 2. SEVİYE ve XP HESAPLA
+        # 2. SEVİYE ve HEDEF
         rutbe, _ = calculate_level(user.xp)
         target = user.target
         hedef_siralamasi = target.ranking if target and target.ranking else "İlk 20.000"
         
-        # 3. TYT/AYT DENGE STRATEJİSİ
+        # 3. 🔥 EKSİK KONU ANALİZİ (YENİ!) 🔥
+        # Son 3 denemedeki yanlış konuları çekiyoruz
+        son_denemeler = db.query(models.ExamResult).filter(models.ExamResult.user_id == user.id).order_by(models.ExamResult.date.desc()).limit(3).all()
+        
+        eksik_konular = {}
+        for exam in son_denemeler:
+            if exam.topic_mistakes:
+                for konu, hata_sayisi in exam.topic_mistakes.items():
+                    eksik_konular[konu] = eksik_konular.get(konu, 0) + hata_sayisi
+        
+        # En çok hata yapılan 5 konuyu seç
+        kritik_eksikler = sorted(eksik_konular.items(), key=lambda x: x[1], reverse=True)[:5]
+        eksik_txt = ", ".join([f"{k} ({v} Hata)" for k, v in kritik_eksikler]) if kritik_eksikler else "Tespit edilen özel bir eksik yok."
+
+        # 4. STRATEJİ BELİRLEME
         odak_konusu = ""
         if rutbe == "Çaylak":
-            odak_konusu = "DURUM: %100 TYT KONU. Temel Matematik, Paragraf ve Dil Bilgisi konuları ver."
+            odak_konusu = "DURUM: %100 TYT KONU. Temel Matematik ve Paragraf ağırlıklı."
         elif rutbe == "Çırak":
-            odak_konusu = "DURUM: %70 TYT - %30 AYT. TYT konuları ağırlıklı ama araya Türkçe Branş Denemesi ekle."
+            odak_konusu = "DURUM: %70 TYT - %30 AYT. Konu eksiklerini kapat."
         elif rutbe == "Kalfa":
-            odak_konusu = "DURUM: %40 TYT (DENEME) - %60 AYT (KONU). AYT ağırlıklı git ama mutlaka 'TYT Genel Deneme' veya 'Matematik Branş Denemesi' ekle."
+            odak_konusu = "DURUM: %40 TYT (DENEME) - %60 AYT (KONU). AYT'ye yüklen."
         else: 
-            odak_konusu = "DURUM: %100 SINAV MODU. Seri TYT ve AYT Denemeleri ver. Zor kaynaklara yönlendir."
+            odak_konusu = "DURUM: %100 SINAV MODU. Seri Denemeler ve Zor Sorular."
 
         # Geçmiş bitenleri hatırlat
         son_bitenler = db.query(models.Todo).filter(models.Todo.user_id == user.id, models.Todo.is_completed == True).order_by(models.Todo.id.desc()).limit(10).all()
         biten_txt = ", ".join([t.content for t in son_bitenler]) if son_bitenler else "Yok"
 
-        # 4. GÜÇLENDİRİLMİŞ PROMPT (EMİR KİPİ + SOHBET YASAK)
+        # 5. ZEKİ PROMPT (Eksiklere Odaklanan)
         prompt = f"""
-        ROL: Disiplinli YKS Koçu.
-        ÖĞRENCİ: {rutbe} seviyesinde. Hedef: {hedef_siralamasi}.
+        ROL: Sert ve Nokta Atışı Yapan YKS Koçu.
+        ÖĞRENCİ: {rutbe}. Hedef: {hedef_siralamasi}.
         
-        GEÇMİŞTE YAPILANLAR: {biten_txt}.
-        STRATEJİ: {odak_konusu}
+        🚨 ACİL MÜDAHALE EDİLMESİ GEREKEN EKSİKLER (Deneme Analizi): 
+        {eksik_txt}
+        (Bu konulardan hata yapılmış. Programın EN AZ 2 MADDESİ bu eksikleri kapatmaya yönelik olmalı!)
+        
+        GENEL STRATEJİ: {odak_konusu}
+        GEÇMİŞTE YAPILANLAR: {biten_txt} (Tekrar etme).
         
         KURALLAR:
-        1. ASLA "Öğrenci yapsın", "izlesin" gibi 3. şahıs dili kullanma.
-        2. DOĞRUDAN EMİR VER: "Çöz", "İzle", "Bitir", "Tekrarla".
-        3. ASLA sohbet etme, giriş cümlesi yazma (Örn: 'Harika program hazırladım' DEME). Sadece 4 maddeyi alt alta yaz.
-        4. Müfredat sırasına uy.
+        1. ASLA sohbet etme, giriş cümlesi yazma.
+        2. DOĞRUDAN EMİR VER: "Çöz", "İzle", "Tekrarla".
+        3. Deneme analizi kısmındaki eksik konulara öncelik ver.
         
-        GÖREV:
-        Bugün için 4 adet nokta atışı görev yaz.
+        GÖREV: Bugün için 4 adet görev yaz.
         
-        FORMAT ÖRNEĞİ:
-        - [Matematik]: Üslü Sayılar - [Mert Hoca'dan konu videosunu izle ve 3 test bitir.]
-        - [Türkçe]: Paragraf - [Süre tutarak 20 paragraf sorusu çöz.]
+        FORMAT:
+        - [Ders]: Konu - [Yapılacak İşlem]
         """
 
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
@@ -346,22 +361,17 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
         clean_tasks = []
         for line in raw_text.split("\n"):
             line = line.strip()
-            # Kısa veya boş satırları atla
             if len(line) < 10: continue
-            # Yıldızları ve tireleri temizle
             cleaned_line = line.replace("* ", "").strip()
-            if cleaned_line.startswith("- "): 
-                cleaned_line = cleaned_line[2:]
-            
+            if cleaned_line.startswith("- "): cleaned_line = cleaned_line[2:]
             clean_tasks.append(cleaned_line)
 
-        # İlk 4 görevi al ve kaydet
         final_tasks = clean_tasks[:4]
         for task in final_tasks:
             db.add(models.Todo(content=task, user_id=user.id))
         
         db.commit()
-        return {"mesaj": "Yeni görevlerin hazır komutan!", "gorevler": final_tasks}
+        return {"mesaj": "Eksiklerine göre plan revize edildi!", "gorevler": final_tasks}
 
     except Exception as e:
         print(f"Plan Hata: {e}")

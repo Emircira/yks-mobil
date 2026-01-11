@@ -15,17 +15,38 @@ class _ProgressScreenState extends State<ProgressScreen> {
   bool _isLoading = true;
 
   // 👇 1. KONU LİSTESİ (SABİT)
+  // 👇 GÜNCELLENMİŞ KONU LİSTESİ (TYT + AYT)
   final Map<String, List<String>> _dersKonulari = {
-    "Türkçe": [
+    "TYT Türkçe": [
       "Paragraf",
       "Sözcükte Anlam",
       "Cümlede Anlam",
       "Ses Bilgisi",
       "Yazım Kuralları",
       "Noktalama",
-      "Dil Bilgisi"
+      "Dil Bilgisi (Karma)"
     ],
-    "Sosyal": [
+    "TYT Matematik": [
+      "Temel Kavramlar",
+      "Sayı Basamakları",
+      "Problemler",
+      "Fonksiyonlar",
+      "Polinomlar",
+      "PKOB",
+      "Mantık",
+      "Kümeler"
+    ],
+    "TYT Fen": [
+      "Fizik Bilimine Giriş",
+      "Hareket ve Kuvvet",
+      "Isı ve Sıcaklık",
+      "Optik",
+      "Atom ve Yapısı",
+      "Madde ve Özellikleri",
+      "Hücre",
+      "Canlıların Sınıflandırılması"
+    ],
+    "TYT Sosyal": [
       "Tarih Bilimine Giriş",
       "İlk Uygarlıklar",
       "Coğrafi Konum",
@@ -33,25 +54,66 @@ class _ProgressScreenState extends State<ProgressScreen> {
       "Felsefe",
       "Din Kültürü"
     ],
-    "Matematik": [
-      "Temel Kavramlar",
-      "Sayı Basamakları",
-      "Problemler",
-      "Fonksiyonlar",
-      "Polinomlar",
-      "PKOB",
+    // 👇 YENİ EKLENEN AYT KISIMLARI 👇
+    "AYT Matematik": [
+      "2. Dereceden Denklemler",
+      "Parabol",
+      "Eşitsizlikler",
+      "Trigonometri",
+      "Logaritma",
+      "Diziler",
+      "Limit",
       "Türev",
-      "İntegral",
-      "Geometri"
+      "İntegral"
     ],
-    "Fen": [
-      "Fizik Bilimine Giriş",
-      "Hareket",
-      "Optik",
-      "Kimyasal Türler",
-      "Hücre",
-      "Canlıların Sınıflandırılması"
+    "AYT Edebiyat": [
+      "Şiir Bilgisi",
+      "Söz Sanatları",
+      "İslamiyet Öncesi Türk Edb.",
+      "Halk Edebiyatı",
+      "Divan Edebiyatı",
+      "Tanzimat",
+      "Servet-i Fünun",
+      "Cumhuriyet Dönemi"
     ],
+    "AYT Fizik": [
+      "Vektörler",
+      "Bağıl Hareket",
+      "Newton'un Hareket Yasaları",
+      "İtme ve Momentum",
+      "Elektrik ve Manyetizma",
+      "Çembersel Hareket",
+      "Modern Fizik"
+    ],
+    "AYT Kimya": [
+      "Modern Atom Teorisi",
+      "Gazlar",
+      "Sıvı Çözeltiler",
+      "Kimyasal Tepkimelerde Enerji",
+      "Kimyasal Denge",
+      "Elektrokimya",
+      "Organik Kimya"
+    ],
+    "AYT Biyoloji": [
+      "Sinir Sistemi",
+      "Endokrin Sistem",
+      "Duyu Organları",
+      "Destek ve Hareket",
+      "Sindirim Sistemi",
+      "Dolaşım Sistemi",
+      "Solunum Sistemi",
+      "Üriner Sistem",
+      "Bitki Biyolojisi",
+      "Canlılarda Enerji Dönüşümleri"
+    ],
+    "AYT Tarih/Coğrafya": [
+      "Tarih ve Zaman",
+      "İlk ve Orta Çağlarda Türk Dünyası",
+      "Osmanlı Kültür ve Medeniyeti",
+      "20. Yüzyıl Başlarında Dünya",
+      "Türkiye'nin Jeopolitik Konumu",
+      "Üretim Dağıtım Tüketim"
+    ]
   };
 
   @override
