@@ -330,22 +330,23 @@ def create_ai_plan(db: Session = Depends(get_db), user: models.User = Depends(ge
 
         # 4. YAPAY ZEKA PROMPTU
         prompt = f"""
-        ROL: Profesyonel ve Stratejik YKS Koçu.
+        ROL: YKS Koçu ve Müfredat Uzmanı.
         ÖĞRENCİ: {rutbe} seviyesinde. Hedef: {hedef_siralamasi}.
         
-        STRATEJİ:
+        GEÇMİŞTE BİTİRİLEN KONULAR: {biten_txt}.
+        
+        KURAL 1 (SÜREKLİLİK): Yukarıda bitirilen konulara bak ve müfredattaki BİR SONRAKİ mantıklı konuyu belirle.
+        Örneğin: Öğrenci 'Türev' bitirdiyse, ona rastgele 'Kümeler' verme, 'İntegral' ver. Zinciri koparma.
+        
+        KURAL 2 (DENGE):
         {odak_konusu}
         
-        GEÇMİŞTE YAPILANLAR: {biten_txt} (Bunları tekrar verme).
-        
         GÖREV:
-        Bugün için 4 adet nokta atışı görev oluştur.
-        Eğer öğrenci AYT çalışıyorsa (Kalfa/Usta), araya mutlaka bir TYT Denemesi (Branş/Genel) sıkıştırarak hamlamasını engelle.
+        Bugün için 4 adet nokta atışı görev yaz.
         
-        FORMAT (Sadece liste):
-        - [Ders]: [Net ve Somut Görev]
+        FORMAT:
+        - [Ders]: [Konu] - [Detay: Video mu izlesin, test mi çözsün?]
         """
-
         if not GOOGLE_API_KEY: return {"mesaj": "Bağlantı Yok", "gorevler": []}
 
         model = genai.GenerativeModel(MODEL_NAME)
